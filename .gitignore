@@ -4,6 +4,4 @@
 .DS_Store
 .serena
 mcp-go-debugger.log
-delete_after_copying
 .claude-backup-*
-!delete_after_copying/**/*

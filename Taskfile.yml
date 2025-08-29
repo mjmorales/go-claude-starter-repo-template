@@ -1,0 +1,218 @@
+# Taskfile.yml - Root orchestrator for Go monorepo
+# https://taskfile.dev
+
+version: '3'
+
+env:
+  MONOREPO_ROOT:
+    sh: pwd
+  GO_VERSION: '1.23.0'
+  CGO_ENABLED: '0'
+  GOOS:
+    sh: go env GOOS
+  GOARCH:
+    sh: go env GOARCH
+
+vars:
+  # Dynamically discover all cmd services
+  SERVICES:
+    sh: find cmd -maxdepth 1 -type d ! -path cmd 2>/dev/null | xargs -n1 basename 2>/dev/null || echo ""
+  
+  # Dynamically discover all modules with Taskfiles
+  MODULES_WITH_TASKS:
+    sh: find . -name "Taskfile.yml" -not -path "./Taskfile.yml" -not -path "./.task/*" 2>/dev/null | xargs -n1 dirname 2>/dev/null || echo ""
+  
+  # Build metadata
+  BUILD_TIME:
+    sh: date -u '+%Y-%m-%d_%H:%M:%S'
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  
+  # Common build flags
+  LDFLAGS: -ldflags "-X main.Version={{.VERSION}} -X main.BuildTime={{.BUILD_TIME}} -X main.Commit={{.COMMIT}} -s -w"
+
+includes:
+  # Core shared tasks
+  build:
+    taskfile: .task/build.yml
+    optional: true
+  test:
+    taskfile: .task/test.yml
+    optional: true
+  lint:
+    taskfile: .task/lint.yml
+    optional: true
+  tools:
+    taskfile: .task/tools.yml
+    optional: true
+  docker:
+    taskfile: .task/docker.yml
+    optional: true
+  proto:
+    taskfile: .task/proto.yml
+    optional: true
+  release:
+    taskfile: .task/release.yml
+    optional: true
+  deps:
+    taskfile: .task/deps.yml
+    optional: true
+  claude:
+    taskfile: .task/claude.yml
+    optional: true
+  precommit:
+    taskfile: .task/precommit.yml
+    optional: true
+
+tasks:
+  default:
+    desc: Show available tasks and quick start guide
+    silent: true
+    cmds:
+      - task: help
+
+  help:
+    desc: Display help information
+    silent: true
+    cmds:
+      - |
+        echo "🚀 Go Monorepo Development Tasks"
+        echo "================================"
+        echo ""
+        echo "🎯 Quick Start:"
+        echo "  task doctor           - Check environment health"
+        echo "  task setup            - Run interactive setup wizard"
+        echo "  task init             - Initialize development environment"
+        echo "  task build:all        - Build all services"
+        echo "  task test:all         - Run all tests"
+        echo "  task lint:all         - Run all linters"
+        echo ""
+        echo "🏗️  Build Commands:"
+        echo "  task build:all        - Build all services"
+        echo "  task build:service NAME=<service>  - Build specific service"
+        echo "  task build:watch      - Build with file watching"
+        echo ""
+        echo "🧪 Test Commands:"
+        echo "  task test:all         - Run all tests"
+        echo "  task test:unit        - Run unit tests only"
+        echo "  task test:integration - Run integration tests"
+        echo "  task test:coverage    - Generate coverage report"
+        echo "  task test:bench       - Run benchmarks"
+        echo ""
+        echo "🔍 Quality Commands:"
+        echo "  task lint:all         - Run all linters"
+        echo "  task lint:fix         - Auto-fix linting issues"
+        echo "  task check            - Run all checks (lint + test)"
+        echo "  task precommit:check  - Full precommit validation"
+        echo "  task precommit:check:fast - Quick precommit check"
+        echo "  task precommit:fix    - Auto-fix common issues"
+        echo ""
+        echo "🐳 Docker Commands:"
+        echo "  task docker:build     - Build all Docker images"
+        echo "  task docker:push      - Push images to registry"
+        echo "  task docker:compose:up - Start services locally"
+        echo ""
+        echo "📦 Release Commands:"
+        echo "  task release:all      - Build all release binaries"
+        echo "  task release:service NAME=<service>  - Release specific service"
+        echo ""
+        echo "🛠️  Development:"
+        echo "  task init             - Initialize development environment"
+        echo "  task deps:update      - Update all dependencies"
+        echo "  task deps:tidy        - Tidy all go.mod files"
+        echo "  task clean            - Clean all artifacts"
+        echo "  task tools:install    - Install development tools"
+        echo ""
+        echo "🔒 Precommit & Git Hooks:"
+        echo "  task precommit:install:hooks - Install git hooks"
+        echo "  task precommit:tools:install - Install precommit tools"
+        echo "  task precommit:status - Show precommit status"
+        echo ""
+        echo "🤖 Claude AI:"
+        echo "  task claude:setup     - Install Claude configuration"
+        echo "  task claude:info      - Show Claude status"
+        echo "  task claude:agents    - List available agents"
+        echo ""
+        if [ -n "{{.SERVICES}}" ]; then
+          echo "📊 Available Services:"
+          for service in {{.SERVICES}}; do
+            echo "  - $service"
+          done
+        fi
+
+  init:
+    desc: Initialize development environment
+    cmds:
+      - |
+        # Make setup.sh executable
+        chmod +x setup.sh
+        
+        # Run doctor first to check environment
+        echo "🏥 Checking environment..."
+        ./setup.sh doctor
+        
+        # Install recommended tools if needed
+        read -p "Install recommended tools? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+          ./setup.sh install recommended
+        fi
+      - task: deps:update
+      - task: proto:generate
+      - echo "✅ Development environment ready!"
+
+  setup:
+    desc: Run interactive setup wizard
+    cmds:
+      - |
+        chmod +x setup.sh
+        ./setup.sh install
+
+  doctor:
+    desc: Check development environment health
+    cmds:
+      - |
+        chmod +x setup.sh
+        ./setup.sh doctor
+
+  check:
+    desc: Run all quality checks
+    cmds:
+      - task: lint:all
+      - task: test:all
+
+  ci:
+    desc: Run complete CI pipeline
+    cmds:
+      - task: deps:tidy
+      - task: lint:all
+      - task: test:all
+      - task: build:all
+
+  clean:
+    desc: Clean all build artifacts
+    cmds:
+      - task: build:clean
+      - task: test:clean
+      - task: docker:clean
+      - rm -rf dist/ bin/ coverage/ vendor/
+
+  watch:
+    desc: Development mode with auto-reload
+    deps: [tools:install]
+    cmds:
+      - |
+        if command -v air >/dev/null 2>&1; then
+          air -c .air.toml
+        else
+          echo "⚠️  Air not installed. Run 'task tools:install' first"
+          exit 1
+        fi
+
+  status:
+    desc: Show project status
+    silent: true
+    cmds: 
+      - ./scripts/setup/project-status.sh

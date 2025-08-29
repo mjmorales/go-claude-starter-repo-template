@@ -1,0 +1,196 @@
+# .task/lint.yml - Linting task definitions
+version: '3'
+
+vars:
+  GOLANGCI_CONFIG: "{{.MONOREPO_ROOT}}/.golangci.yml"
+
+tasks:
+  all:
+    desc: Run all linting checks
+    cmds:
+      - task: fmt:check
+      - task: vet
+      - task: golangci
+      - task: staticcheck
+      - task: security
+
+  fmt:check:
+    desc: Check code formatting
+    cmds:
+      - |
+        echo "🔍 Checking code formatting..."
+        UNFORMATTED=$(gofmt -l .)
+        if [ -n "$UNFORMATTED" ]; then
+          echo "❌ Formatting issues found in:"
+          echo "$UNFORMATTED"
+          echo ""
+          echo "Run 'task lint:fmt' to fix"
+          exit 1
+        fi
+        echo "✅ Code formatting OK"
+
+  fmt:
+    desc: Fix code formatting
+    aliases: [fmt:fix]
+    cmds:
+      - |
+        echo "🔧 Formatting code..."
+        gofmt -s -w .
+        if command -v goimports >/dev/null 2>&1; then
+          goimports -w .
+        else
+          echo "⚠️  goimports not installed, skipping import formatting"
+        fi
+        if command -v gofumpt >/dev/null 2>&1; then
+          gofumpt -w .
+        fi
+        echo "✅ Code formatted"
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - |
+        echo "🔍 Running go vet..."
+        go vet ./...
+        echo "✅ go vet passed"
+
+  golangci:
+    desc: Run golangci-lint with project configuration
+    cmds:
+      - |
+        if ! command -v golangci-lint >/dev/null 2>&1; then
+          echo "⚠️  golangci-lint not installed."
+          echo "Run: ./setup.sh install recommended"
+          exit 1
+        fi
+        echo "🔍 Running golangci-lint..."
+        golangci-lint run --config {{.GOLANGCI_CONFIG}} ./...
+        echo "✅ golangci-lint passed"
+
+  golangci:fix:
+    desc: Auto-fix golangci-lint issues where possible
+    cmds:
+      - |
+        if ! command -v golangci-lint >/dev/null 2>&1; then
+          echo "⚠️  golangci-lint not installed. Installing..."
+          task tools:install:golangci-lint
+        fi
+        echo "🔧 Auto-fixing linting issues..."
+        golangci-lint run --config {{.GOLANGCI_CONFIG}} --fix ./...
+        echo "✅ Auto-fix complete"
+
+  staticcheck:
+    desc: Run staticcheck analyzer
+    cmds:
+      - |
+        if ! command -v staticcheck >/dev/null 2>&1; then
+          echo "⚠️  staticcheck not installed. Installing..."
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+        fi
+        echo "🔍 Running staticcheck..."
+        staticcheck ./...
+        echo "✅ staticcheck passed"
+
+  security:
+    desc: Run security scan with gosec
+    vars:
+      REPORT_FILE: "{{.MONOREPO_ROOT}}/security-report.json"
+    cmds:
+      - |
+        if ! command -v gosec >/dev/null 2>&1; then
+          echo "⚠️  gosec not installed. Installing..."
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+        fi
+        echo "🔒 Running security scan..."
+        gosec -fmt json -out {{.REPORT_FILE}} -stdout ./...
+        echo "✅ Security scan complete. Report: {{.REPORT_FILE}}"
+
+  mod:tidy:
+    desc: Ensure all go.mod files are tidy
+    cmds:
+      - |
+        echo "📦 Tidying go.mod files..."
+        # Main module
+        go mod tidy
+        # Service modules
+        for dir in {{.MONOREPO_ROOT}}/cmd/*/; do
+          if [ -f "$dir/go.mod" ]; then
+            echo "  Tidying $(basename $dir)..."
+            (cd "$dir" && go mod tidy)
+          fi
+        done
+        # If using go workspaces
+        if [ -f "{{.MONOREPO_ROOT}}/go.work" ]; then
+          go work sync
+        fi
+        echo "✅ All go.mod files tidied"
+
+  mod:verify:
+    desc: Verify module dependencies
+    cmds:
+      - |
+        echo "🔍 Verifying module dependencies..."
+        go mod verify
+        echo "✅ Module dependencies verified"
+
+  fix:
+    desc: Auto-fix all linting issues
+    aliases: [fix:all]
+    cmds:
+      - task: fmt
+      - task: mod:tidy
+      - task: golangci:fix
+      - echo "✅ All auto-fixable issues resolved"
+
+  complexity:
+    desc: Check code complexity metrics
+    cmds:
+      - |
+        echo "📊 Analyzing code complexity..."
+        if ! command -v gocyclo >/dev/null 2>&1; then
+          echo "Installing gocyclo..."
+          go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+        fi
+        echo ""
+        echo "Functions with complexity > 10:"
+        gocyclo -over 10 . || true
+        echo ""
+        if ! command -v gocognit >/dev/null 2>&1; then
+          echo "Installing gocognit..."
+          go install github.com/uudashr/gocognit/cmd/gocognit@latest
+        fi
+        echo "Functions with cognitive complexity > 15:"
+        gocognit -over 15 . || true
+
+  unused:
+    desc: Find unused code
+    cmds:
+      - |
+        if ! command -v unused >/dev/null 2>&1; then
+          echo "Installing unused..."
+          go install honnef.co/go/tools/cmd/unused@latest
+        fi
+        echo "🔍 Finding unused code..."
+        unused ./...
+
+  vulncheck:
+    desc: Check for known vulnerabilities
+    cmds:
+      - |
+        if ! command -v govulncheck >/dev/null 2>&1; then
+          echo "Installing govulncheck..."
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+        fi
+        echo "🔒 Checking for vulnerabilities..."
+        govulncheck ./...
+        echo "✅ Vulnerability check complete"
+
+  report:
+    desc: Generate comprehensive linting report
+    cmds:
+      - |
+        echo "📊 Generating linting report..."
+        mkdir -p {{.MONOREPO_ROOT}}/reports
+        golangci-lint run --config {{.GOLANGCI_CONFIG}} --out-format json ./... > {{.MONOREPO_ROOT}}/reports/lint.json 2>&1 || true
+        golangci-lint run --config {{.GOLANGCI_CONFIG}} --out-format html ./... > {{.MONOREPO_ROOT}}/reports/lint.html 2>&1 || true
+        echo "✅ Reports generated in {{.MONOREPO_ROOT}}/reports/"

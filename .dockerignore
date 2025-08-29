@@ -1,0 +1,311 @@
+# =============================================================================
+# Git and Version Control
+# =============================================================================
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+
+# =============================================================================
+# GitHub and CI/CD
+# =============================================================================
+.github/
+.gitlab-ci.yml
+.travis.yml
+azure-pipelines.yml
+Jenkinsfile
+.circleci/
+
+# =============================================================================
+# Documentation
+# =============================================================================
+*.md
+!README.md  # Sometimes needed for build context
+docs/
+LICENSE
+CHANGELOG*
+CODE_OF_CONDUCT*
+CONTRIBUTING*
+SECURITY*
+
+# =============================================================================
+# Development and Test Files
+# =============================================================================
+*_test.go
+**/*_test.go
+test/
+tests/
+testing/
+*.test
+*.out
+coverage*
+.coverage/
+*.cover
+*.prof
+benchmarks/
+
+# =============================================================================
+# IDE and Editor Files
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+.project
+.classpath
+.settings/
+*.iml
+*.sublime-*
+
+# =============================================================================
+# Build Artifacts
+# =============================================================================
+dist/
+bin/
+build/
+target/
+out/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+*.obj
+
+# =============================================================================
+# Temporary Files
+# =============================================================================
+tmp/
+temp/
+*.tmp
+*.temp
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# =============================================================================
+# Configuration Files
+# =============================================================================
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+secrets/
+private/
+*.pem
+*.key
+*.crt
+*.p12
+
+# =============================================================================
+# Task and Build Configuration
+# =============================================================================
+Taskfile.yml
+Taskfile.yaml
+.task/
+Makefile
+makefile
+GNUmakefile
+Rakefile
+Gulpfile*
+Gruntfile*
+
+# =============================================================================
+# Package Managers and Dependencies
+# =============================================================================
+vendor/
+go.work
+go.work.sum
+node_modules/
+bower_components/
+jspm_packages/
+package*.json
+yarn.lock
+pnpm-lock.yaml
+composer.json
+composer.lock
+Gemfile
+Gemfile.lock
+Pipfile
+Pipfile.lock
+poetry.lock
+pyproject.toml
+requirements*.txt
+
+# =============================================================================
+# Container and Orchestration
+# =============================================================================
+docker-compose*.yml
+docker-compose*.yaml
+!docker-compose.override.yml  # Sometimes needed for build args
+Dockerfile*
+!Dockerfile  # Keep the main Dockerfile
+.dockerignore
+kubernetes/
+k8s/
+helm/
+charts/
+*.yaml
+*.yml
+!config/*.yaml  # Keep config files if needed
+
+# =============================================================================
+# Protocol Buffers and API Definitions
+# =============================================================================
+*.proto
+api/proto/
+api/openapi/
+api/graphql/
+*.swagger.json
+*.openapi.json
+
+# =============================================================================
+# Language Specific
+# =============================================================================
+
+# Python
+*.py
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+.Python
+venv/
+.venv/
+env/
+.env/
+virtualenv/
+.tox/
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
+
+# JavaScript/TypeScript
+*.js
+*.jsx
+*.ts
+*.tsx
+*.map
+*.min.js
+*.min.css
+webpack.config.*
+rollup.config.*
+.eslintrc*
+.prettierrc*
+tsconfig.json
+babel.config.*
+
+# Ruby
+*.rb
+*.gemspec
+.rspec
+.rubocop.yml
+.ruby-version
+.ruby-gemset
+.rvmrc
+
+# Java/Kotlin
+*.java
+*.class
+*.jar
+*.war
+*.ear
+*.gradle
+gradle/
+gradlew*
+.gradle/
+pom.xml
+mvnw*
+.mvn/
+
+# =============================================================================
+# Archives and Backups
+# =============================================================================
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.gz
+*.bz2
+*.xz
+*.rar
+*.7z
+*.bak
+*.backup
+*.old
+*.orig
+*_backup
+*_old
+
+# =============================================================================
+# OS Specific
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# =============================================================================
+# Monitoring and Observability
+# =============================================================================
+.prometheus/
+.grafana/
+.jaeger/
+
+# =============================================================================
+# AI and Development Tools
+# =============================================================================
+.serena/
+.claude/
+.claude-backup*/
+.copilot/
+.mcp.json
+.aider*
+.cursor/
+
+# =============================================================================
+# Miscellaneous
+# =============================================================================
+*.sql
+!migrations/*.sql  # Keep migration files
+*.dump
+*.csv
+*.xlsx
+*.xls
+*.pdf
+*.doc
+*.docx
+.cache/
+.sass-cache/
+.parcel-cache/
+.next/
+.nuxt/
+.vuepress/
+.serverless/
+.terraform/
+*.tfstate*
+.vagrant/
+
+# AI project files
+.serena/
+.claude/
+.mcp.json

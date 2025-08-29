@@ -1,0 +1,348 @@
+version: '3.8'
+
+# Docker Compose configuration for local development
+# Usage: docker-compose -f deployments/docker/docker-compose.yml up
+
+x-common-variables: &common-variables
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  TZ: ${TZ:-UTC}
+
+x-common-labels: &common-labels
+  com.example.project: "go-monorepo"
+  com.example.environment: "development"
+  com.example.team: "platform"
+
+x-healthcheck-defaults: &healthcheck-defaults
+  interval: 30s
+  timeout: 3s
+  start_period: 40s
+  retries: 3
+
+x-restart-policy: &restart-policy
+  restart: unless-stopped
+
+x-resource-limits: &resource-limits
+  deploy:
+    resources:
+      limits:
+        cpus: '1'
+        memory: 512M
+      reservations:
+        cpus: '0.25'
+        memory: 128M
+
+services:
+  # =============================================================================
+  # Infrastructure Services
+  # =============================================================================
+  
+  postgres:
+    image: postgres:16-alpine
+    container_name: monorepo-postgres
+    <<: *restart-policy
+    <<: *resource-limits
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-monorepo}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_INIT_DB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+      POSTGRES_HOST_AUTH_METHOD: md5
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-monorepo}"]
+    networks:
+      - monorepo-network
+    labels:
+      <<: *common-labels
+      com.example.service: "postgres"
+
+  redis:
+    image: redis:7-alpine
+    container_name: monorepo-redis
+    <<: *restart-policy
+    <<: *resource-limits
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
+      --appendonly ${REDIS_APPENDONLY:-yes}
+      --appendfsync ${REDIS_APPENDFSYNC:-everysec}
+      --save "${REDIS_SAVE:-900 1 300 10 60 10000}"
+      --loglevel ${REDIS_LOGLEVEL:-notice}
+      --requirepass ${REDIS_PASSWORD:-redis}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+      - ./configs/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+    networks:
+      - monorepo-network
+    labels:
+      <<: *common-labels
+      com.example.service: "redis"
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: monorepo-rabbitmq
+    <<: *restart-policy
+    <<: *resource-limits
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-rabbitmq}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rabbitmq}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: ${RABBITMQ_MEMORY_LIMIT:-0.4}
+      RABBITMQ_DISK_FREE_LIMIT: ${RABBITMQ_DISK_FREE_LIMIT:-1GB}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./configs/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+    networks:
+      - monorepo-network
+    labels:
+      <<: *common-labels
+      com.example.service: "rabbitmq"
+
+  # =============================================================================
+  # Observability Stack
+  # =============================================================================
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: monorepo-prometheus
+    <<: *restart-policy
+    <<: *resource-limits
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}'
+      - '--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-10GB}'
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - prometheus_data:/prometheus
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/prometheus/alerts:/etc/prometheus/alerts:ro
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+    networks:
+      - monorepo-network
+    labels:
+      <<: *common-labels
+      com.example.service: "prometheus"
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: monorepo-grafana
+    <<: *restart-policy
+    <<: *resource-limits
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: ${GF_PLUGINS:-}
+      GF_SERVER_ROOT_URL: ${GF_ROOT_URL:-http://localhost:3000}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_LOG_MODE: ${GF_LOG_MODE:-console}
+      GF_LOG_LEVEL: ${GF_LOG_LEVEL:-info}
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+    networks:
+      - monorepo-network
+    depends_on:
+      - prometheus
+    labels:
+      <<: *common-labels
+      com.example.service: "grafana"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.51
+    container_name: monorepo-jaeger
+    <<: *restart-policy
+    <<: *resource-limits
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: ${JAEGER_STORAGE:-memory}
+      METRICS_STORAGE_TYPE: prometheus
+      PROMETHEUS_SERVER_URL: http://prometheus:9090
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"           # Jaeger UI
+      - "${JAEGER_COLLECTOR_PORT:-14268}:14268"    # Collector HTTP
+      - "${JAEGER_OTLP_GRPC_PORT:-4317}:4317"      # OTLP gRPC
+      - "${JAEGER_OTLP_HTTP_PORT:-4318}:4318"      # OTLP HTTP
+      - "${JAEGER_ZIPKIN_PORT:-9411}:9411"         # Zipkin compatible endpoint
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16687/"]
+    networks:
+      - monorepo-network
+    labels:
+      <<: *common-labels
+      com.example.service: "jaeger"
+
+  # =============================================================================
+  # Application Services
+  # =============================================================================
+
+  # Example service configuration - uncomment and modify as needed
+  # api-gateway:
+  #   build:
+  #     context: ../..
+  #     dockerfile: cmd/api-gateway/Dockerfile
+  #     args:
+  #       SERVICE: api-gateway
+  #       VERSION: ${VERSION:-dev}
+  #       BUILD_TIME: ${BUILD_TIME:-}
+  #       COMMIT: ${COMMIT:-}
+  #   image: monorepo/api-gateway:${VERSION:-latest}
+  #   container_name: monorepo-api-gateway
+  #   <<: *restart-policy
+  #   <<: *resource-limits
+  #   environment:
+  #     <<: *common-variables
+  #     SERVICE_NAME: api-gateway
+  #     PORT: ${API_GATEWAY_PORT:-8080}
+  #     DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-monorepo}?sslmode=disable
+  #     REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+  #     RABBITMQ_URL: amqp://${RABBITMQ_USER:-rabbitmq}:${RABBITMQ_PASSWORD:-rabbitmq}@rabbitmq:5672/
+  #     JAEGER_AGENT_HOST: jaeger
+  #     JAEGER_AGENT_PORT: 6831
+  #     METRICS_ADDR: :9090
+  #   ports:
+  #     - "${API_GATEWAY_PORT:-8080}:8080"
+  #     - "${API_GATEWAY_METRICS_PORT:-9090}:9090"
+  #   volumes:
+  #     - ./configs/api-gateway:/app/configs:ro
+  #   healthcheck:
+  #     <<: *healthcheck-defaults
+  #     test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   networks:
+  #     - monorepo-network
+  #   labels:
+  #     <<: *common-labels
+  #     com.example.service: "api-gateway"
+  #     prometheus.io/scrape: "true"
+  #     prometheus.io/port: "9090"
+  #     prometheus.io/path: "/metrics"
+
+  # =============================================================================
+  # Development Tools
+  # =============================================================================
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: monorepo-mailhog
+    <<: *restart-policy
+    ports:
+      - "${MAILHOG_SMTP_PORT:-1025}:1025"    # SMTP server
+      - "${MAILHOG_UI_PORT:-8025}:8025"       # Web UI
+    networks:
+      - monorepo-network
+    labels:
+      <<: *common-labels
+      com.example.service: "mailhog"
+      com.example.description: "Email testing tool"
+
+  adminer:
+    image: adminer:4.8.1
+    container_name: monorepo-adminer
+    <<: *restart-policy
+    <<: *resource-limits
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: ${ADMINER_DESIGN:-pepa-linha}
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+    depends_on:
+      - postgres
+    networks:
+      - monorepo-network
+    labels:
+      <<: *common-labels
+      com.example.service: "adminer"
+      com.example.description: "Database management UI"
+
+# =============================================================================
+# Networks
+# =============================================================================
+
+networks:
+  monorepo-network:
+    name: monorepo-network
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+    labels:
+      <<: *common-labels
+
+# =============================================================================
+# Volumes
+# =============================================================================
+
+volumes:
+  postgres_data:
+    name: monorepo-postgres-data
+    labels:
+      <<: *common-labels
+      com.example.volume: "postgres-data"
+  
+  redis_data:
+    name: monorepo-redis-data
+    labels:
+      <<: *common-labels
+      com.example.volume: "redis-data"
+  
+  rabbitmq_data:
+    name: monorepo-rabbitmq-data
+    labels:
+      <<: *common-labels
+      com.example.volume: "rabbitmq-data"
+  
+  prometheus_data:
+    name: monorepo-prometheus-data
+    labels:
+      <<: *common-labels
+      com.example.volume: "prometheus-data"
+  
+  grafana_data:
+    name: monorepo-grafana-data
+    labels:
+      <<: *common-labels
+      com.example.volume: "grafana-data"

@@ -1,0 +1,197 @@
+# .task/test.yml - Test task definitions
+version: '3'
+
+vars:
+  COVERAGE_DIR: "{{.MONOREPO_ROOT}}/coverage"
+  TEST_TIMEOUT: "10m"
+  UNIT_TAGS: "unit"
+  INTEGRATION_TAGS: "integration"
+  E2E_TAGS: "e2e"
+  # Parallel test execution
+  TEST_PARALLEL: "4"
+
+tasks:
+  all:
+    desc: Run all tests with coverage
+    cmds:
+      - task: unit
+      - task: integration
+      - task: coverage:report
+
+  unit:
+    desc: Run unit tests
+    vars:
+      COVERAGE_FILE: "{{.COVERAGE_DIR}}/unit.out"
+    cmds:
+      - mkdir -p {{.COVERAGE_DIR}}
+      - |
+        echo "🧪 Running unit tests..."
+        go test -v \
+          -race \
+          -timeout={{.TEST_TIMEOUT}} \
+          -tags={{.UNIT_TAGS}} \
+          -coverprofile={{.COVERAGE_FILE}} \
+          -covermode=atomic \
+          -parallel={{.TEST_PARALLEL}} \
+          ./... 2>&1 | tee {{.COVERAGE_DIR}}/unit.log
+      - |
+        if [ $? -eq 0 ]; then
+          echo "✅ Unit tests passed"
+        else
+          echo "❌ Unit tests failed"
+          exit 1
+        fi
+
+  integration:
+    desc: Run integration tests
+    vars:
+      COVERAGE_FILE: "{{.COVERAGE_DIR}}/integration.out"
+    cmds:
+      - mkdir -p {{.COVERAGE_DIR}}
+      - |
+        echo "🧪 Running integration tests..."
+        go test -v \
+          -race \
+          -timeout={{.TEST_TIMEOUT}} \
+          -tags={{.INTEGRATION_TAGS}} \
+          -coverprofile={{.COVERAGE_FILE}} \
+          -covermode=atomic \
+          ./... 2>&1 | tee {{.COVERAGE_DIR}}/integration.log
+      - |
+        if [ $? -eq 0 ]; then
+          echo "✅ Integration tests passed"
+        else
+          echo "❌ Integration tests failed"
+          exit 1
+        fi
+
+  e2e:
+    desc: Run end-to-end tests
+    vars:
+      COVERAGE_FILE: "{{.COVERAGE_DIR}}/e2e.out"
+    cmds:
+      - mkdir -p {{.COVERAGE_DIR}}
+      - |
+        if [ -d "{{.MONOREPO_ROOT}}/test/e2e" ]; then
+          echo "🧪 Running e2e tests..."
+          go test -v \
+            -timeout={{.TEST_TIMEOUT}} \
+            -tags={{.E2E_TAGS}} \
+            -coverprofile={{.COVERAGE_FILE}} \
+            ./test/e2e/... 2>&1 | tee {{.COVERAGE_DIR}}/e2e.log
+        else
+          echo "⚠️  No e2e tests found"
+        fi
+
+  service:
+    desc: Test a specific service
+    vars:
+      SERVICE_PATH: "./cmd/{{.NAME}}/..."
+    cmds:
+      - |
+        echo "🧪 Testing {{.NAME}}..."
+        go test -v \
+          -race \
+          -timeout={{.TEST_TIMEOUT}} \
+          {{.SERVICE_PATH}}
+    requires:
+      vars: [NAME]
+
+  package:
+    desc: Test a specific package
+    cmds:
+      - |
+        echo "🧪 Testing {{.PKG}}..."
+        go test -v \
+          -race \
+          -timeout={{.TEST_TIMEOUT}} \
+          {{.PKG}}
+    requires:
+      vars: [PKG]
+
+  coverage:merge:
+    desc: Merge all coverage files
+    cmds:
+      - |
+        if [ -d "{{.COVERAGE_DIR}}" ]; then
+          echo "mode: atomic" > {{.COVERAGE_DIR}}/coverage.out
+          find {{.COVERAGE_DIR}} -name "*.out" ! -name "coverage.out" \
+            -exec grep -h -v "mode:" {} \; >> {{.COVERAGE_DIR}}/coverage.out 2>/dev/null || true
+        fi
+
+  coverage:report:
+    desc: Generate coverage report
+    deps: [coverage:merge]
+    cmds:
+      - |
+        if [ -f "{{.COVERAGE_DIR}}/coverage.out" ]; then
+          go tool cover -func={{.COVERAGE_DIR}}/coverage.out
+          go tool cover -html={{.COVERAGE_DIR}}/coverage.out -o {{.COVERAGE_DIR}}/coverage.html
+          echo "📊 Coverage report: {{.COVERAGE_DIR}}/coverage.html"
+          # Show coverage percentage
+          COVERAGE=$(go tool cover -func={{.COVERAGE_DIR}}/coverage.out | grep total | awk '{print $3}')
+          echo "📈 Total coverage: $COVERAGE"
+        else
+          echo "⚠️  No coverage data found"
+        fi
+
+  coverage:view:
+    desc: Open coverage report in browser
+    deps: [coverage:report]
+    cmds:
+      - |
+        if [ -f "{{.COVERAGE_DIR}}/coverage.html" ]; then
+          if command -v open >/dev/null 2>&1; then
+            open {{.COVERAGE_DIR}}/coverage.html
+          elif command -v xdg-open >/dev/null 2>&1; then
+            xdg-open {{.COVERAGE_DIR}}/coverage.html
+          else
+            echo "📊 Coverage report: {{.COVERAGE_DIR}}/coverage.html"
+          fi
+        fi
+
+  bench:
+    desc: Run benchmarks
+    cmds:
+      - |
+        echo "⚡ Running benchmarks..."
+        go test -bench=. -benchmem -run=^$ ./... | tee {{.COVERAGE_DIR}}/bench.txt
+
+  bench:compare:
+    desc: Compare benchmark results
+    cmds:
+      - |
+        if ! command -v benchstat >/dev/null 2>&1; then
+          echo "Installing benchstat..."
+          go install golang.org/x/perf/cmd/benchstat@latest
+        fi
+        if [ -f "{{.COVERAGE_DIR}}/bench.txt" ] && [ -f "{{.COVERAGE_DIR}}/bench-old.txt" ]; then
+          benchstat {{.COVERAGE_DIR}}/bench-old.txt {{.COVERAGE_DIR}}/bench.txt
+        else
+          echo "⚠️  Need both bench.txt and bench-old.txt for comparison"
+        fi
+
+  watch:
+    desc: Run tests in watch mode
+    cmds:
+      - |
+        if ! command -v gotestsum >/dev/null 2>&1; then
+          echo "Installing gotestsum..."
+          go install gotest.tools/gotestsum@latest
+        fi
+        gotestsum --watch
+
+  clean:
+    desc: Clean test artifacts
+    cmds:
+      - rm -rf {{.COVERAGE_DIR}}
+      - find . -type f -name "*.test" -delete 2>/dev/null || true
+      - find . -type f -name "*.out" -delete 2>/dev/null || true
+      - echo "✅ Test artifacts cleaned"
+
+  short:
+    desc: Run short tests only (no integration/e2e)
+    cmds:
+      - |
+        echo "🧪 Running short tests..."
+        go test -short -v ./...

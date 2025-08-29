@@ -1,0 +1,205 @@
+# .task/claude.yml - Claude AI configuration management
+version: '3'
+
+vars:
+  CLAUDE_CONFIG_SCRIPT: "{{.MONOREPO_ROOT}}/scripts/setup/install-claude-config.sh"
+  CLAUDE_DIR: "{{.MONOREPO_ROOT}}/.claude"
+  MCP_CONFIG: "{{.MONOREPO_ROOT}}/.mcp.json"
+
+tasks:
+  setup:
+    desc: Install Claude AI configuration files
+    cmds:
+      - |
+        if [ ! -f "{{.CLAUDE_CONFIG_SCRIPT}}" ]; then
+          echo "❌ Claude configuration script not found"
+          exit 1
+        fi
+        chmod +x {{.CLAUDE_CONFIG_SCRIPT}}
+        {{.CLAUDE_CONFIG_SCRIPT}}
+
+  setup:cleanup:
+    desc: Install Claude config and remove source files
+    cmds:
+      - |
+        chmod +x {{.CLAUDE_CONFIG_SCRIPT}}
+        {{.CLAUDE_CONFIG_SCRIPT}} --cleanup
+
+  verify:
+    desc: Verify Claude configuration installation
+    cmds:
+      - |
+        chmod +x {{.CLAUDE_CONFIG_SCRIPT}}
+        {{.CLAUDE_CONFIG_SCRIPT}} --verify
+
+  agents:
+    desc: List available Claude agents
+    silent: true
+    cmds:
+      - |
+        if [ ! -d "{{.CLAUDE_DIR}}/agents" ]; then
+          echo "⚠️  No Claude agents found. Run 'task claude:setup' first"
+          exit 0
+        fi
+        
+        echo "🤖 Available Claude Agents:"
+        echo "=========================="
+        for agent in {{.CLAUDE_DIR}}/agents/*.md; do
+          if [ -f "$agent" ]; then
+            name=$(basename "$agent" .md)
+            echo "  @$name"
+            
+            # Try to extract description from first line
+            desc=$(head -1 "$agent" 2>/dev/null | sed 's/^#\s*//')
+            if [ -n "$desc" ] && [ "$desc" != "$(basename $agent .md)" ]; then
+              echo "    $desc"
+            fi
+          fi
+        done
+
+  commands:
+    desc: List available Claude commands
+    silent: true
+    cmds:
+      - |
+        if [ ! -d "{{.CLAUDE_DIR}}/commands" ]; then
+          echo "⚠️  No Claude commands found. Run 'task claude:setup' first"
+          exit 0
+        fi
+        
+        echo "🎯 Available Claude Commands:"
+        echo "============================"
+        for cmd in {{.CLAUDE_DIR}}/commands/*.md; do
+          if [ -f "$cmd" ]; then
+            name=$(basename "$cmd" .md)
+            echo "  /$name"
+            
+            # Try to extract description
+            desc=$(grep -m1 "^description:" "$cmd" 2>/dev/null | sed 's/^description:\s*//')
+            if [ -n "$desc" ]; then
+              echo "    $desc"
+            fi
+          fi
+        done
+
+  info:
+    desc: Show Claude configuration information
+    silent: true
+    cmds:
+      - |
+        echo "🤖 Claude Configuration Status"
+        echo "=============================="
+        echo ""
+        
+        # Check .mcp.json
+        if [ -f "{{.MCP_CONFIG}}" ]; then
+          echo "✅ MCP Configuration: {{.MCP_CONFIG}}"
+          
+          # Count configured servers
+          servers=$(grep -c '"command"' {{.MCP_CONFIG}} 2>/dev/null || echo "0")
+          echo "   Configured servers: $servers"
+        else
+          echo "❌ MCP Configuration: Not found"
+        fi
+        echo ""
+        
+        # Check .claude directory
+        if [ -d "{{.CLAUDE_DIR}}" ]; then
+          echo "✅ Claude Directory: {{.CLAUDE_DIR}}"
+          
+          # Count agents
+          if [ -d "{{.CLAUDE_DIR}}/agents" ]; then
+            agent_count=$(find {{.CLAUDE_DIR}}/agents -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+            echo "   Agents: $agent_count"
+          fi
+          
+          # Count commands
+          if [ -d "{{.CLAUDE_DIR}}/commands" ]; then
+            cmd_count=$(find {{.CLAUDE_DIR}}/commands -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+            echo "   Commands: $cmd_count"
+          fi
+        else
+          echo "❌ Claude Directory: Not found"
+        fi
+        echo ""
+        
+        # Show workspace path
+        if [ -f "{{.MCP_CONFIG}}" ]; then
+          workspace=$(grep -o '"--workspace",\s*"[^"]*"' {{.MCP_CONFIG}} | sed 's/.*"\([^"]*\)"$/\1/')
+          if [ -n "$workspace" ]; then
+            echo "Workspace Path: $workspace"
+            
+            if [ "$workspace" = "REPLACE_ME_WITH_YOUR_WORKSPACE_PATH" ]; then
+              echo "⚠️  Workspace path needs to be configured!"
+            fi
+          fi
+        fi
+
+  backup:
+    desc: Backup current Claude configuration
+    vars:
+      BACKUP_DIR: "{{.MONOREPO_ROOT}}/.claude-backup-{{.TIMESTAMP}}"
+      TIMESTAMP:
+        sh: date +%Y%m%d-%H%M%S
+    cmds:
+      - |
+        if [ ! -f "{{.MCP_CONFIG}}" ] && [ ! -d "{{.CLAUDE_DIR}}" ]; then
+          echo "⚠️  No Claude configuration to backup"
+          exit 0
+        fi
+        
+        mkdir -p {{.BACKUP_DIR}}
+        
+        if [ -f "{{.MCP_CONFIG}}" ]; then
+          cp {{.MCP_CONFIG}} {{.BACKUP_DIR}}/
+        fi
+        
+        if [ -d "{{.CLAUDE_DIR}}" ]; then
+          cp -r {{.CLAUDE_DIR}} {{.BACKUP_DIR}}/
+        fi
+        
+        echo "✅ Claude configuration backed up to: {{.BACKUP_DIR}}"
+
+  clean:
+    desc: Remove Claude configuration (with backup)
+    cmds:
+      - task: backup
+      - |
+        echo "⚠️  This will remove Claude configuration files!"
+        read -p "Continue? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+          rm -rf {{.CLAUDE_DIR}}
+          rm -f {{.MCP_CONFIG}}
+          echo "✅ Claude configuration removed"
+        else
+          echo "Cancelled"
+        fi
+
+  help:
+    desc: Show Claude configuration help
+    silent: true
+    cmds:
+      - |
+        echo "🤖 Claude Configuration Management"
+        echo "================================="
+        echo ""
+        echo "Setup Commands:"
+        echo "  task claude:setup         - Install Claude configuration"
+        echo "  task claude:setup:cleanup - Install and remove source files"
+        echo "  task claude:verify        - Verify installation"
+        echo ""
+        echo "Information Commands:"
+        echo "  task claude:info          - Show configuration status"
+        echo "  task claude:agents        - List available agents"
+        echo "  task claude:commands      - List available commands"
+        echo ""
+        echo "Management Commands:"
+        echo "  task claude:backup        - Backup configuration"
+        echo "  task claude:clean         - Remove configuration"
+        echo ""
+        echo "Usage in Claude:"
+        echo "  Agents:   @agent-name (e.g., @go-expert-engineer)"
+        echo "  Commands: /command-name (e.g., /plan, /commit)"
+        echo ""
+        echo "For more details, see: .claude/README.md"

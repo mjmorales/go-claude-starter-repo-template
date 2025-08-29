@@ -1,0 +1,252 @@
+# .task/tools.yml - Development tools installation and management
+version: '3'
+
+vars:
+  TOOLS_DIR: "{{.MONOREPO_ROOT}}/tools"
+  BIN_DIR: "{{.MONOREPO_ROOT}}/bin"
+  SETUP_SCRIPT: "{{.MONOREPO_ROOT}}/setup.sh"
+
+tasks:
+  install:
+    desc: Install all development tools using setup.sh
+    cmds:
+      - |
+        if [ ! -f "{{.SETUP_SCRIPT}}" ]; then
+          echo "❌ setup.sh not found"
+          exit 1
+        fi
+        chmod +x {{.SETUP_SCRIPT}}
+        {{.SETUP_SCRIPT}} install recommended
+
+  install:interactive:
+    desc: Interactive tool installation wizard
+    cmds:
+      - |
+        chmod +x {{.SETUP_SCRIPT}}
+        {{.SETUP_SCRIPT}} install
+
+  install:minimal:
+    desc: Install minimal toolset
+    cmds:
+      - |
+        chmod +x {{.SETUP_SCRIPT}}
+        {{.SETUP_SCRIPT}} install minimal
+
+  install:full:
+    desc: Install complete toolset
+    cmds:
+      - |
+        chmod +x {{.SETUP_SCRIPT}}
+        {{.SETUP_SCRIPT}} install full
+
+  doctor:
+    desc: Run comprehensive environment diagnosis
+    cmds:
+      - |
+        chmod +x {{.SETUP_SCRIPT}}
+        {{.SETUP_SCRIPT}} doctor
+
+  update:
+    desc: Update all installed Go tools
+    cmds:
+      - |
+        chmod +x {{.SETUP_SCRIPT}}
+        {{.SETUP_SCRIPT}} update
+
+  # Legacy individual tool installations (kept for compatibility)
+  install:golangci-lint:
+    desc: Install golangci-lint
+    vars:
+      VERSION: "v1.61.0"
+    cmds:
+      - |
+        if ! command -v golangci-lint >/dev/null 2>&1; then
+          echo "📦 Installing golangci-lint {{.VERSION}}..."
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
+            sh -s -- -b $(go env GOPATH)/bin {{.VERSION}}
+        else
+          echo "✅ golangci-lint already installed: $(golangci-lint --version)"
+        fi
+
+  install:air:
+    desc: Install Air for hot reload
+    cmds:
+      - |
+        if ! command -v air >/dev/null 2>&1; then
+          echo "📦 Installing Air..."
+          go install github.com/air-verse/air@latest
+        else
+          echo "✅ Air already installed: $(air -v)"
+        fi
+
+  install:gotestsum:
+    desc: Install gotestsum for better test output
+    cmds:
+      - |
+        if ! command -v gotestsum >/dev/null 2>&1; then
+          echo "📦 Installing gotestsum..."
+          go install gotest.tools/gotestsum@latest
+        else
+          echo "✅ gotestsum already installed"
+        fi
+
+  install:mockgen:
+    desc: Install mockgen for generating mocks
+    cmds:
+      - |
+        if ! command -v mockgen >/dev/null 2>&1; then
+          echo "📦 Installing mockgen..."
+          go install go.uber.org/mock/mockgen@latest
+        else
+          echo "✅ mockgen already installed: $(mockgen -version 2>&1 | head -1)"
+        fi
+
+  install:wire:
+    desc: Install Wire for dependency injection
+    cmds:
+      - |
+        if ! command -v wire >/dev/null 2>&1; then
+          echo "📦 Installing wire..."
+          go install github.com/google/wire/cmd/wire@latest
+        else
+          echo "✅ wire already installed"
+        fi
+
+  install:migrate:
+    desc: Install golang-migrate for database migrations
+    cmds:
+      - |
+        if ! command -v migrate >/dev/null 2>&1; then
+          echo "📦 Installing golang-migrate..."
+          go install -tags 'postgres mysql sqlite3' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+        else
+          echo "✅ migrate already installed: $(migrate -version)"
+        fi
+
+  install:swag:
+    desc: Install swag for Swagger documentation
+    cmds:
+      - |
+        if ! command -v swag >/dev/null 2>&1; then
+          echo "📦 Installing swag..."
+          go install github.com/swaggo/swag/cmd/swag@latest
+        else
+          echo "✅ swag already installed: $(swag --version)"
+        fi
+
+  install:protoc:
+    desc: Install protoc and Go plugins
+    cmds:
+      - |
+        if ! command -v protoc >/dev/null 2>&1; then
+          echo "📦 Installing protoc..."
+          if [ "$(uname)" = "Darwin" ]; then
+            brew install protobuf
+          else
+            echo "⚠️  Please install protoc manually for your platform"
+            echo "Visit: https://github.com/protocolbuffers/protobuf/releases"
+          fi
+        else
+          echo "✅ protoc already installed: $(protoc --version)"
+        fi
+        echo "📦 Installing protoc Go plugins..."
+        go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+        echo "✅ Protoc plugins installed"
+
+  install:buf:
+    desc: Install Buf for protobuf management
+    cmds:
+      - |
+        if ! command -v buf >/dev/null 2>&1; then
+          echo "📦 Installing buf..."
+          go install github.com/bufbuild/buf/cmd/buf@latest
+        else
+          echo "✅ buf already installed: $(buf --version)"
+        fi
+
+  install:task:
+    desc: Install Task runner
+    cmds:
+      - |
+        if ! command -v task >/dev/null 2>&1; then
+          echo "📦 Installing Task..."
+          if [ "$(uname)" = "Darwin" ]; then
+            brew install go-task
+          else
+            sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+          fi
+        else
+          echo "✅ Task already installed: $(task --version)"
+        fi
+
+  install:grpcurl:
+    desc: Install grpcurl for gRPC debugging
+    cmds:
+      - |
+        if ! command -v grpcurl >/dev/null 2>&1; then
+          echo "📦 Installing grpcurl..."
+          go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+        else
+          echo "✅ grpcurl already installed: $(grpcurl --version 2>&1)"
+        fi
+
+  install:evans:
+    desc: Install Evans gRPC client
+    cmds:
+      - |
+        if ! command -v evans >/dev/null 2>&1; then
+          echo "📦 Installing evans..."
+          go install github.com/ktr0731/evans@latest
+        else
+          echo "✅ evans already installed"
+        fi
+
+  install:security:
+    desc: Install security tools
+    cmds:
+      - |
+        echo "📦 Installing security tools..."
+        go install github.com/securego/gosec/v2/cmd/gosec@latest
+        go install golang.org/x/vuln/cmd/govulncheck@latest
+        go install github.com/sonatype-nexus-community/nancy@latest
+        echo "✅ Security tools installed"
+
+  install:analysis:
+    desc: Install code analysis tools
+    cmds:
+      - |
+        echo "📦 Installing analysis tools..."
+        go install honnef.co/go/tools/cmd/staticcheck@latest
+        go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+        go install github.com/uudashr/gocognit/cmd/gocognit@latest
+        go install github.com/alexkohler/prealloc@latest
+        go install mvdan.cc/gofumpt@latest
+        go install golang.org/x/tools/cmd/goimports@latest
+        echo "✅ Analysis tools installed"
+
+  install:benchmarks:
+    desc: Install benchmark tools
+    cmds:
+      - |
+        echo "📦 Installing benchmark tools..."
+        go install golang.org/x/perf/cmd/benchstat@latest
+        go install github.com/nikolaydubina/go-bench-viewer@latest
+        echo "✅ Benchmark tools installed"
+
+  check:
+    desc: Check installed tools and versions (uses setup.sh doctor)
+    silent: true
+    cmds:
+      - |
+        chmod +x {{.SETUP_SCRIPT}}
+        {{.SETUP_SCRIPT}} doctor
+
+  clean:
+    desc: Clean tool caches
+    cmds:
+      - |
+        echo "🧹 Cleaning tool caches..."
+        go clean -cache
+        go clean -modcache
+        echo "✅ Tool caches cleaned"

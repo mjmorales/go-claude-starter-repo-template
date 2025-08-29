@@ -1,0 +1,292 @@
+# cmd/example-service/Taskfile.yml - Service-specific tasks
+version: '3'
+
+vars:
+  SERVICE_NAME: example-service
+  SERVICE_DIR:
+    sh: pwd
+  # Service-specific configuration
+  PORT: "8080"
+  GRPC_PORT: "9090"
+  METRICS_PORT: "2112"
+
+tasks:
+  default:
+    desc: Build {{.SERVICE_NAME}}
+    cmds:
+      - task: build
+
+  build:
+    desc: Build {{.SERVICE_NAME}}
+    cmds:
+      - |
+        echo "🔨 Building {{.SERVICE_NAME}}..."
+        go build -o ../../bin/{{.SERVICE_NAME}} .
+        echo "✅ Built {{.SERVICE_NAME}}"
+
+  run:
+    desc: Run {{.SERVICE_NAME}} locally
+    env:
+      PORT: "{{.PORT}}"
+      GRPC_PORT: "{{.GRPC_PORT}}"
+      METRICS_PORT: "{{.METRICS_PORT}}"
+      ENV: "development"
+    cmds:
+      - |
+        echo "🚀 Starting {{.SERVICE_NAME}}..."
+        echo "  HTTP: http://localhost:{{.PORT}}"
+        echo "  gRPC: localhost:{{.GRPC_PORT}}"
+        echo "  Metrics: http://localhost:{{.METRICS_PORT}}/metrics"
+        go run . {{.CLI_ARGS}}
+
+  dev:
+    desc: Run with hot reload
+    cmds:
+      - |
+        if ! command -v air >/dev/null 2>&1; then
+          echo "⚠️  Air not installed. Installing..."
+          go install github.com/air-verse/air@latest
+        fi
+        
+        if [ ! -f ".air.toml" ]; then
+          echo "Creating .air.toml..."
+          cat > .air.toml <<EOF
+        root = "."
+        tmp_dir = "tmp"
+        
+        [build]
+          bin = "./tmp/{{.SERVICE_NAME}}"
+          cmd = "go build -o ./tmp/{{.SERVICE_NAME}} ."
+          delay = 1000
+          exclude_dir = ["tmp", "vendor", "internal/mocks"]
+          exclude_file = []
+          exclude_regex = ["_test.go"]
+          exclude_unchanged = false
+          follow_symlink = false
+          full_bin = ""
+          include_dir = []
+          include_ext = ["go", "yaml", "yml", "toml", "env"]
+          kill_delay = "0s"
+          log = "build-errors.log"
+          send_interrupt = false
+          stop_on_error = true
+        
+        [color]
+          app = ""
+          build = "yellow"
+          main = "magenta"
+          runner = "green"
+          watcher = "cyan"
+        
+        [log]
+          time = false
+        
+        [misc]
+          clean_on_exit = true
+        EOF
+        fi
+        
+        air
+
+  test:
+    desc: Run {{.SERVICE_NAME}} tests
+    cmds:
+      - |
+        echo "🧪 Testing {{.SERVICE_NAME}}..."
+        go test -v -race -cover ./...
+
+  test:unit:
+    desc: Run unit tests only
+    cmds:
+      - |
+        echo "🧪 Running unit tests..."
+        go test -v -race -cover -tags=unit ./...
+
+  test:integration:
+    desc: Run integration tests
+    cmds:
+      - |
+        echo "🧪 Running integration tests..."
+        go test -v -race -cover -tags=integration ./...
+
+  lint:
+    desc: Lint {{.SERVICE_NAME}} code
+    cmds:
+      - |
+        echo "🔍 Linting {{.SERVICE_NAME}}..."
+        golangci-lint run ./...
+
+  docker:build:
+    desc: Build Docker image
+    vars:
+      IMAGE_NAME: "{{.SERVICE_NAME}}"
+      IMAGE_TAG: "latest"
+    cmds:
+      - |
+        echo "🐳 Building Docker image..."
+        
+        if [ ! -f "Dockerfile" ]; then
+          echo "Creating Dockerfile..."
+          cat > Dockerfile <<EOF
+        # Build stage
+        FROM golang:1.23-alpine AS builder
+        
+        WORKDIR /app
+        
+        # Copy go mod files
+        COPY go.mod go.sum ./
+        RUN go mod download
+        
+        # Copy source code
+        COPY . .
+        
+        # Build binary
+        RUN CGO_ENABLED=0 GOOS=linux go build -o {{.SERVICE_NAME}} .
+        
+        # Final stage
+        FROM alpine:latest
+        
+        RUN apk --no-cache add ca-certificates
+        WORKDIR /root/
+        
+        # Copy binary from builder
+        COPY --from=builder /app/{{.SERVICE_NAME}} .
+        
+        # Expose ports
+        EXPOSE {{.PORT}} {{.GRPC_PORT}} {{.METRICS_PORT}}
+        
+        CMD ["./{{.SERVICE_NAME}}"]
+        EOF
+        fi
+        
+        docker build -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} .
+        echo "✅ Docker image built: {{.IMAGE_NAME}}:{{.IMAGE_TAG}}"
+
+  docker:run:
+    desc: Run service in Docker
+    deps: [docker:build]
+    cmds:
+      - |
+        echo "🐳 Running {{.SERVICE_NAME}} in Docker..."
+        docker run -it --rm \
+          -p {{.PORT}}:{{.PORT}} \
+          -p {{.GRPC_PORT}}:{{.GRPC_PORT}} \
+          -p {{.METRICS_PORT}}:{{.METRICS_PORT}} \
+          -e ENV=development \
+          {{.SERVICE_NAME}}:latest
+
+  proto:
+    desc: Generate protobuf code for this service
+    cmds:
+      - |
+        PROTO_DIR="../../api/proto/{{.SERVICE_NAME}}"
+        if [ ! -d "$PROTO_DIR" ]; then
+          echo "⚠️  No proto directory for {{.SERVICE_NAME}}"
+          exit 0
+        fi
+        
+        echo "🔄 Generating protobuf for {{.SERVICE_NAME}}..."
+        protoc \
+          --go_out=. \
+          --go-grpc_out=. \
+          --go_opt=paths=source_relative \
+          --go-grpc_opt=paths=source_relative \
+          $PROTO_DIR/*.proto
+        echo "✅ Protobuf generated"
+
+  migrate:up:
+    desc: Run database migrations up
+    cmds:
+      - |
+        MIGRATIONS_DIR="./migrations"
+        if [ ! -d "$MIGRATIONS_DIR" ]; then
+          echo "⚠️  No migrations directory found"
+          exit 0
+        fi
+        
+        if ! command -v migrate >/dev/null 2>&1; then
+          echo "⚠️  migrate not installed"
+          exit 1
+        fi
+        
+        echo "⬆️  Running migrations up..."
+        migrate -path $MIGRATIONS_DIR -database "$DATABASE_URL" up
+
+  migrate:down:
+    desc: Rollback database migrations
+    cmds:
+      - |
+        MIGRATIONS_DIR="./migrations"
+        if [ ! -d "$MIGRATIONS_DIR" ]; then
+          echo "⚠️  No migrations directory found"
+          exit 0
+        fi
+        
+        echo "⬇️  Rolling back migrations..."
+        migrate -path $MIGRATIONS_DIR -database "$DATABASE_URL" down 1
+
+  migrate:create:
+    desc: Create new migration
+    vars:
+      NAME: "{{.NAME}}"
+    cmds:
+      - |
+        if [ -z "{{.NAME}}" ]; then
+          echo "❌ NAME required"
+          echo "Usage: task migrate:create NAME=add_users_table"
+          exit 1
+        fi
+        
+        MIGRATIONS_DIR="./migrations"
+        mkdir -p $MIGRATIONS_DIR
+        
+        if ! command -v migrate >/dev/null 2>&1; then
+          echo "⚠️  migrate not installed"
+          exit 1
+        fi
+        
+        migrate create -ext sql -dir $MIGRATIONS_DIR -seq {{.NAME}}
+        echo "✅ Migration created: {{.NAME}}"
+    requires:
+      vars: [NAME]
+
+  swagger:
+    desc: Generate Swagger documentation
+    cmds:
+      - |
+        if ! command -v swag >/dev/null 2>&1; then
+          echo "⚠️  swag not installed"
+          go install github.com/swaggo/swag/cmd/swag@latest
+        fi
+        
+        echo "📚 Generating Swagger docs..."
+        swag init -g main.go -o ./docs
+        echo "✅ Swagger docs generated in ./docs"
+
+  grpcui:
+    desc: Start gRPC UI for debugging
+    cmds:
+      - |
+        if ! command -v grpcui >/dev/null 2>&1; then
+          echo "Installing grpcui..."
+          go install github.com/fullstorydev/grpcui/cmd/grpcui@latest
+        fi
+        
+        echo "🔍 Starting gRPC UI on http://localhost:8081..."
+        grpcui -plaintext -port 8081 localhost:{{.GRPC_PORT}}
+
+  logs:
+    desc: Tail service logs
+    cmds:
+      - |
+        if [ -f "logs/{{.SERVICE_NAME}}.log" ]; then
+          tail -f logs/{{.SERVICE_NAME}}.log
+        else
+          echo "⚠️  No log file found"
+        fi
+
+  clean:
+    desc: Clean service artifacts
+    cmds:
+      - rm -rf tmp/ ../../bin/{{.SERVICE_NAME}} coverage.out
+      - echo "✅ Service artifacts cleaned"

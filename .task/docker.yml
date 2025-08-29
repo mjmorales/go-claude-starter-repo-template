@@ -1,0 +1,327 @@
+# .task/docker.yml - Docker task definitions
+version: '3'
+
+vars:
+  REGISTRY: "docker.io/REPLACE_ME_WITH_YOUR_REGISTRY"
+  DOCKER_BUILDKIT: "1"
+  DEFAULT_DOCKERFILE: "{{.MONOREPO_ROOT}}/build/Dockerfile"
+
+tasks:
+  build:
+    desc: Build all Docker images
+    cmds:
+      - |
+        if [ -z "{{.SERVICES}}" ]; then
+          echo "⚠️  No services found to build"
+          exit 0
+        fi
+        for service in {{.SERVICES}}; do
+          task docker:build:service NAME=$service
+        done
+
+  build:service:
+    desc: Build Docker image for a specific service
+    vars:
+      DOCKERFILE: "{{.MONOREPO_ROOT}}/cmd/{{.NAME}}/Dockerfile"
+      CONTEXT: "{{.MONOREPO_ROOT}}"
+      IMAGE_NAME: "{{.REGISTRY}}/{{.NAME}}"
+      IMAGE_TAG: "{{.VERSION}}"
+    cmds:
+      - |
+        if [ ! -f "{{.DOCKERFILE}}" ]; then
+          echo "⚠️  No Dockerfile for {{.NAME}}, checking for default..."
+          if [ -f "{{.DEFAULT_DOCKERFILE}}" ]; then
+            DOCKERFILE="{{.DEFAULT_DOCKERFILE}}"
+          else
+            echo "❌ No Dockerfile found for {{.NAME}}"
+            exit 1
+          fi
+        else
+          DOCKERFILE="{{.DOCKERFILE}}"
+        fi
+        echo "🐳 Building Docker image for {{.NAME}}..."
+        docker build \
+          --build-arg SERVICE={{.NAME}} \
+          --build-arg VERSION={{.VERSION}} \
+          --build-arg COMMIT={{.COMMIT}} \
+          --build-arg BUILD_TIME={{.BUILD_TIME}} \
+          -f "$DOCKERFILE" \
+          -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} \
+          -t {{.IMAGE_NAME}}:latest \
+          {{.CONTEXT}}
+        echo "✅ Built {{.IMAGE_NAME}}:{{.IMAGE_TAG}}"
+    requires:
+      vars: [NAME]
+
+  push:
+    desc: Push all images to registry
+    cmds:
+      - |
+        for service in {{.SERVICES}}; do
+          task docker:push:service NAME=$service
+        done
+
+  push:service:
+    desc: Push a specific service image
+    vars:
+      IMAGE_NAME: "{{.REGISTRY}}/{{.NAME}}"
+      IMAGE_TAG: "{{.VERSION}}"
+    cmds:
+      - |
+        echo "📤 Pushing {{.IMAGE_NAME}}:{{.IMAGE_TAG}}..."
+        docker push {{.IMAGE_NAME}}:{{.IMAGE_TAG}}
+        docker push {{.IMAGE_NAME}}:latest
+        echo "✅ Pushed {{.IMAGE_NAME}}:{{.IMAGE_TAG}}"
+    requires:
+      vars: [NAME]
+
+  compose:up:
+    desc: Start services with docker-compose
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_OVERRIDE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.override.yml"
+    cmds:
+      - |
+        if [ ! -f "{{.COMPOSE_FILE}}" ]; then
+          echo "❌ docker-compose.yml not found at {{.COMPOSE_FILE}}"
+          exit 1
+        fi
+        echo "🐳 Starting Docker Compose services..."
+        if [ -f "{{.COMPOSE_OVERRIDE}}" ]; then
+          docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_OVERRIDE}}" up -d
+        else
+          docker-compose -f "{{.COMPOSE_FILE}}" up -d
+        fi
+        echo "✅ Services started. Run 'task docker:compose:ps' to see status"
+
+  compose:down:
+    desc: Stop services
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_OVERRIDE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.override.yml"
+    cmds:
+      - |
+        echo "🛑 Stopping Docker Compose services..."
+        if [ -f "{{.COMPOSE_OVERRIDE}}" ]; then
+          docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_OVERRIDE}}" down
+        else
+          docker-compose -f "{{.COMPOSE_FILE}}" down
+        fi
+        echo "✅ Services stopped"
+
+  compose:ps:
+    desc: Show service status
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_OVERRIDE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.override.yml"
+    cmds:
+      - |
+        if [ -f "{{.COMPOSE_OVERRIDE}}" ]; then
+          docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_OVERRIDE}}" ps
+        else
+          docker-compose -f "{{.COMPOSE_FILE}}" ps
+        fi
+
+  compose:logs:
+    desc: Show service logs
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_OVERRIDE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.override.yml"
+    cmds:
+      - |
+        if [ -f "{{.COMPOSE_OVERRIDE}}" ]; then
+          docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_OVERRIDE}}" logs -f {{.SERVICE}}
+        else
+          docker-compose -f "{{.COMPOSE_FILE}}" logs -f {{.SERVICE}}
+        fi
+
+  compose:restart:
+    desc: Restart a service
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_OVERRIDE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.override.yml"
+    cmds:
+      - |
+        if [ -z "{{.SERVICE}}" ]; then
+          echo "❌ SERVICE variable required. Usage: task docker:compose:restart SERVICE=<service>"
+          exit 1
+        fi
+        echo "🔄 Restarting {{.SERVICE}}..."
+        if [ -f "{{.COMPOSE_OVERRIDE}}" ]; then
+          docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_OVERRIDE}}" restart {{.SERVICE}}
+        else
+          docker-compose -f "{{.COMPOSE_FILE}}" restart {{.SERVICE}}
+        fi
+        echo "✅ {{.SERVICE}} restarted"
+
+  compose:exec:
+    desc: Execute command in a running service
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_OVERRIDE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.override.yml"
+    cmds:
+      - |
+        if [ -z "{{.SERVICE}}" ] || [ -z "{{.CMD}}" ]; then
+          echo "❌ SERVICE and CMD required. Usage: task docker:compose:exec SERVICE=<service> CMD='<command>'"
+          exit 1
+        fi
+        if [ -f "{{.COMPOSE_OVERRIDE}}" ]; then
+          docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_OVERRIDE}}" exec {{.SERVICE}} {{.CMD}}
+        else
+          docker-compose -f "{{.COMPOSE_FILE}}" exec {{.SERVICE}} {{.CMD}}
+        fi
+
+  compose:pull:
+    desc: Pull latest images
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_OVERRIDE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.override.yml"
+    cmds:
+      - |
+        echo "📥 Pulling latest images..."
+        if [ -f "{{.COMPOSE_OVERRIDE}}" ]; then
+          docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_OVERRIDE}}" pull
+        else
+          docker-compose -f "{{.COMPOSE_FILE}}" pull
+        fi
+        echo "✅ Images updated"
+
+  compose:build:
+    desc: Build services defined in docker-compose
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_OVERRIDE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.override.yml"
+    cmds:
+      - |
+        echo "🔨 Building Docker Compose services..."
+        if [ -f "{{.COMPOSE_OVERRIDE}}" ]; then
+          docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_OVERRIDE}}" build {{.SERVICE}}
+        else
+          docker-compose -f "{{.COMPOSE_FILE}}" build {{.SERVICE}}
+        fi
+        echo "✅ Build complete"
+
+  compose:up:prod:
+    desc: Start services with production config
+    vars:
+      COMPOSE_FILE: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.yml"
+      COMPOSE_PROD: "{{.MONOREPO_ROOT}}/deployments/docker/docker-compose.prod.yml"
+    cmds:
+      - |
+        if [ ! -f "{{.COMPOSE_PROD}}" ]; then
+          echo "❌ docker-compose.prod.yml not found"
+          exit 1
+        fi
+        echo "🚀 Starting services in production mode..."
+        docker-compose -f "{{.COMPOSE_FILE}}" -f "{{.COMPOSE_PROD}}" up -d
+        echo "✅ Production services started"
+
+  tag:
+    desc: Tag images for release
+    vars:
+      TAG: "{{.TAG}}"
+    cmds:
+      - |
+        if [ -z "{{.TAG}}" ]; then
+          echo "❌ TAG variable required"
+          exit 1
+        fi
+        for service in {{.SERVICES}}; do
+          IMAGE_NAME="{{.REGISTRY}}/$service"
+          docker tag ${IMAGE_NAME}:latest ${IMAGE_NAME}:{{.TAG}}
+          echo "✅ Tagged ${IMAGE_NAME}:{{.TAG}}"
+        done
+    requires:
+      vars: [TAG]
+
+  scan:
+    desc: Security scan Docker images
+    cmds:
+      - |
+        for service in {{.SERVICES}}; do
+          task docker:scan:service NAME=$service
+        done
+
+  scan:service:
+    desc: Security scan a specific service image
+    vars:
+      IMAGE_NAME: "{{.REGISTRY}}/{{.NAME}}"
+    cmds:
+      - |
+        echo "🔒 Scanning {{.IMAGE_NAME}}:latest..."
+        if command -v trivy >/dev/null 2>&1; then
+          trivy image {{.IMAGE_NAME}}:latest
+        elif command -v grype >/dev/null 2>&1; then
+          grype {{.IMAGE_NAME}}:latest
+        else
+          docker scout cves {{.IMAGE_NAME}}:latest 2>/dev/null || \
+          echo "⚠️  No scanner found. Install trivy, grype, or use docker scout"
+        fi
+    requires:
+      vars: [NAME]
+
+  clean:
+    desc: Clean Docker artifacts
+    cmds:
+      - |
+        echo "🧹 Cleaning Docker artifacts..."
+        docker system prune -f
+        echo "✅ Docker artifacts cleaned"
+
+  clean:all:
+    desc: Deep clean Docker (including volumes)
+    cmds:
+      - |
+        echo "⚠️  This will remove all Docker data including volumes!"
+        echo "Press Ctrl+C to cancel, or wait 5 seconds to continue..."
+        sleep 5
+        docker system prune -af --volumes
+        echo "✅ All Docker artifacts cleaned"
+
+  size:
+    desc: Show image sizes
+    cmds:
+      - |
+        echo "📊 Docker Image Sizes:"
+        echo "===================="
+        for service in {{.SERVICES}}; do
+          IMAGE="{{.REGISTRY}}/$service:latest"
+          if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+            SIZE=$(docker image inspect "$IMAGE" --format='{{.Size}}' | numfmt --to=iec-i --suffix=B)
+            echo "$service: $SIZE"
+          fi
+        done
+
+  multi-arch:build:
+    desc: Build multi-architecture images
+    vars:
+      PLATFORMS: "linux/amd64,linux/arm64"
+    cmds:
+      - |
+        if ! docker buildx ls | grep -q multi-arch-builder; then
+          echo "Creating multi-arch builder..."
+          docker buildx create --name multi-arch-builder --use
+        fi
+        for service in {{.SERVICES}}; do
+          task docker:multi-arch:service NAME=$service PLATFORMS={{.PLATFORMS}}
+        done
+
+  multi-arch:service:
+    desc: Build multi-arch image for a service
+    vars:
+      DOCKERFILE: "{{.MONOREPO_ROOT}}/cmd/{{.NAME}}/Dockerfile"
+      IMAGE_NAME: "{{.REGISTRY}}/{{.NAME}}"
+      PLATFORMS: "{{.PLATFORMS}}"
+    cmds:
+      - |
+        docker buildx build \
+          --platform {{.PLATFORMS}} \
+          --build-arg SERVICE={{.NAME}} \
+          --build-arg VERSION={{.VERSION}} \
+          -f {{.DOCKERFILE}} \
+          -t {{.IMAGE_NAME}}:{{.VERSION}} \
+          -t {{.IMAGE_NAME}}:latest \
+          --push \
+          {{.MONOREPO_ROOT}}
+    requires:
+      vars: [NAME, PLATFORMS]

@@ -1,0 +1,202 @@
+# docker-compose.override.yml - Local development overrides
+# This file is automatically loaded by docker-compose and overrides settings in docker-compose.yml
+# Perfect for local development settings that shouldn't be in production
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # Infrastructure Services - Development Overrides
+  # =============================================================================
+  
+  postgres:
+    # Mount local SQL scripts for development
+    volumes:
+      - ./dev-scripts/postgres:/docker-entrypoint-initdb.d:ro
+      - ./backups/postgres:/backups
+    # Expose postgres for local development tools
+    ports:
+      - "5432:5432"
+    environment:
+      # More verbose logging for development
+      POSTGRES_LOG_STATEMENT: all
+      POSTGRES_LOG_DURATION: "on"
+
+  redis:
+    # Disable persistence in development for faster startup
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --loglevel debug
+      --save ""
+      --appendonly no
+    volumes:
+      # Remove data persistence in dev
+      - /data
+
+  rabbitmq:
+    # Enable additional plugins for development
+    environment:
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit log [{console,[{level,debug}]}]"
+    volumes:
+      - ./dev-scripts/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+
+  # =============================================================================
+  # Observability Stack - Development Settings
+  # =============================================================================
+
+  prometheus:
+    # Shorter retention for development
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.retention.time=1d'
+      - '--log.level=debug'
+      - '--web.enable-admin-api'
+
+  grafana:
+    environment:
+      # Development mode settings
+      GF_DEFAULT_APP_MODE: development
+      GF_LOG_LEVEL: debug
+      GF_LOG_CONSOLE_FORMAT: text
+      GF_USERS_ALLOW_SIGN_UP: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      # Install useful development plugins
+      GF_INSTALL_PLUGINS: grafana-piechart-panel,grafana-clock-panel,grafana-simple-json-datasource
+
+  jaeger:
+    environment:
+      # Use memory storage for development
+      SPAN_STORAGE_TYPE: memory
+      LOG_LEVEL: debug
+
+  # =============================================================================
+  # Application Services - Development Mode
+  # =============================================================================
+
+  # Example of development overrides for services
+  # api-gateway:
+  #   build:
+  #     # Always rebuild in development
+  #     cache_from: []
+  #     target: builder  # Stop at builder stage for faster iteration
+  #   environment:
+  #     LOG_LEVEL: debug
+  #     LOG_FORMAT: text  # Human-readable logs
+  #     DEBUG: "true"
+  #     # Development database with verbose settings
+  #     DATABASE_URL: postgres://postgres:postgres@postgres:5432/monorepo_dev?sslmode=disable&log_statement=all
+  #     # Hot reload configuration
+  #     AIR_CONFIG: /app/.air.toml
+  #   volumes:
+  #     # Mount source code for hot reload
+  #     - ../../:/app:cached
+  #     - /app/vendor  # Exclude vendor directory
+  #     - /app/.git    # Exclude git directory
+  #   command: ["air", "-c", ".air.toml"]  # Use air for hot reload
+  #   # Remove resource limits for development
+  #   deploy:
+  #     resources:
+  #       limits: {}
+  #       reservations: {}
+
+  # =============================================================================
+  # Additional Development Tools
+  # =============================================================================
+
+  # Development database UI
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: monorepo-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - ./configs/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      - postgres
+    networks:
+      - monorepo-network
+
+  # Redis UI
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: monorepo-redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:redis
+      HTTP_USER: admin
+      HTTP_PASSWORD: admin
+    ports:
+      - "8082:8081"
+    depends_on:
+      - redis
+    networks:
+      - monorepo-network
+
+  # Documentation server
+  docs:
+    image: squidfunk/mkdocs-material:latest
+    container_name: monorepo-docs
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../:/docs:cached
+    command: ["serve", "--dev-addr=0.0.0.0:8000", "--livereload"]
+    working_dir: /docs
+    networks:
+      - monorepo-network
+
+  # Local S3-compatible storage
+  minio:
+    image: minio/minio:latest
+    container_name: monorepo-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - monorepo-network
+
+  # API documentation
+  swagger-ui:
+    image: swaggerapi/swagger-ui:latest
+    container_name: monorepo-swagger
+    environment:
+      SWAGGER_JSON: /api/openapi.yaml
+      BASE_URL: /swagger
+      VALIDATOR_URL: ""
+    ports:
+      - "8083:8080"
+    volumes:
+      - ../../api/openapi:/api:ro
+    networks:
+      - monorepo-network
+
+# =============================================================================
+# Development Volumes
+# =============================================================================
+
+volumes:
+  minio_data:
+    name: monorepo-minio-data

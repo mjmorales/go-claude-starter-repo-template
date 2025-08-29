@@ -1,0 +1,119 @@
+# .task/build.yml - Build task definitions
+version: '3'
+
+vars:
+  BIN_DIR: "{{.MONOREPO_ROOT}}/bin"
+  DIST_DIR: "{{.MONOREPO_ROOT}}/dist"
+  
+  # Auto-discover buildable services
+  BUILDABLE_SERVICES:
+    sh: |
+      for dir in {{.MONOREPO_ROOT}}/cmd/*/; do
+        if [ -f "$dir/main.go" ]; then
+          basename "$dir"
+        fi
+      done 2>/dev/null || echo ""
+
+tasks:
+  all:
+    desc: Build all services
+    deps: [check:go]
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - |
+        if [ -z "{{.BUILDABLE_SERVICES}}" ]; then
+          echo "⚠️  No services found to build"
+          exit 0
+        fi
+        for service in {{.BUILDABLE_SERVICES}}; do
+          echo "🔨 Building $service..."
+          task build:service NAME=$service
+        done
+
+  service:
+    desc: Build a specific service
+    vars:
+      SERVICE_PATH: "{{.MONOREPO_ROOT}}/cmd/{{.NAME}}"
+      OUTPUT: "{{.BIN_DIR}}/{{.NAME}}"
+    cmds:
+      - |
+        if [ ! -f "{{.SERVICE_PATH}}/main.go" ]; then
+          echo "❌ Service {{.NAME}} not found at {{.SERVICE_PATH}}"
+          exit 1
+        fi
+      - echo "🔨 Building {{.NAME}}..."
+      - |
+        cd {{.SERVICE_PATH}}
+        go build {{.LDFLAGS}} -o {{.OUTPUT}} .
+      - echo "✅ Built {{.NAME}} -> {{.OUTPUT}}"
+    requires:
+      vars: [NAME]
+
+  watch:
+    desc: Build with file watching
+    cmds:
+      - |
+        if ! command -v air >/dev/null 2>&1; then
+          echo "⚠️  Air not installed. Installing..."
+          task tools:install
+        fi
+        air -c {{.MONOREPO_ROOT}}/.air.toml
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BIN_DIR}}
+      - rm -rf {{.DIST_DIR}}
+      - find {{.MONOREPO_ROOT}} -type f -name "*.exe" -delete 2>/dev/null || true
+      - find {{.MONOREPO_ROOT}} -type f -name "*.test" -delete 2>/dev/null || true
+      - echo "✅ Build artifacts cleaned"
+
+  release:
+    desc: Build release binaries for all platforms
+    vars:
+      PLATFORMS: "linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
+    cmds:
+      - mkdir -p {{.DIST_DIR}}
+      - |
+        for service in {{.BUILDABLE_SERVICES}}; do
+          for platform in {{.PLATFORMS}}; do
+            GOOS=$(echo $platform | cut -d'/' -f1)
+            GOARCH=$(echo $platform | cut -d'/' -f2)
+            OUTPUT="{{.DIST_DIR}}/${service}_${GOOS}_${GOARCH}"
+            if [ "$GOOS" = "windows" ]; then
+              OUTPUT="${OUTPUT}.exe"
+            fi
+            echo "📦 Building $service for $platform..."
+            cd {{.MONOREPO_ROOT}}/cmd/$service
+            GOOS=$GOOS GOARCH=$GOARCH go build {{.LDFLAGS}} -o $OUTPUT .
+          done
+        done
+      - echo "✅ Release binaries built in {{.DIST_DIR}}"
+
+  info:
+    desc: Show build information
+    silent: true
+    cmds:
+      - |
+        echo "Build Configuration:"
+        echo "==================="
+        echo "Version:     {{.VERSION}}"
+        echo "Commit:      {{.COMMIT}}"
+        echo "Build Time:  {{.BUILD_TIME}}"
+        echo "LDFLAGS:     {{.LDFLAGS}}"
+        echo ""
+        echo "Services:"
+        for service in {{.BUILDABLE_SERVICES}}; do
+          echo "  - $service"
+        done
+
+  check:go:
+    desc: Check if Go is installed
+    silent: true
+    cmds:
+      - |
+        if ! command -v go >/dev/null 2>&1; then
+          echo "❌ Go is not installed"
+          echo "Run: task setup"
+          exit 1
+        fi

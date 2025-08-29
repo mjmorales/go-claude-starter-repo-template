@@ -1,0 +1,459 @@
+# docker-compose.prod.yml - Production configuration
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# This file contains production-specific overrides
+
+version: '3.8'
+
+x-deploy-policy: &deploy-policy
+  deploy:
+    mode: replicated
+    replicas: 2
+    update_config:
+      parallelism: 1
+      delay: 10s
+      failure_action: rollback
+      monitor: 60s
+      max_failure_ratio: 0.3
+    restart_policy:
+      condition: any
+      delay: 5s
+      max_attempts: 3
+      window: 120s
+    resources:
+      limits:
+        cpus: '2'
+        memory: 1024M
+      reservations:
+        cpus: '0.5'
+        memory: 256M
+
+x-production-logging: &production-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+      labels: "service,environment,version"
+      env: "SERVICE_NAME,ENVIRONMENT,VERSION"
+
+services:
+  # =============================================================================
+  # Infrastructure Services - Production Configuration
+  # =============================================================================
+  
+  postgres:
+    <<: *production-logging
+    environment:
+      # Production optimizations
+      POSTGRES_MAX_CONNECTIONS: 200
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1GB
+      POSTGRES_MAINTENANCE_WORK_MEM: 64MB
+      POSTGRES_CHECKPOINT_COMPLETION_TARGET: 0.9
+      POSTGRES_WAL_BUFFERS: 16MB
+      POSTGRES_DEFAULT_STATISTICS_TARGET: 100
+      POSTGRES_RANDOM_PAGE_COST: 1.1
+      POSTGRES_EFFECTIVE_IO_CONCURRENCY: 200
+      POSTGRES_WORK_MEM: 4MB
+      POSTGRES_MIN_WAL_SIZE: 1GB
+      POSTGRES_MAX_WAL_SIZE: 4GB
+      # Security
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_backup:/backup
+      - type: tmpfs
+        target: /dev/shm
+        tmpfs:
+          size: 268435456  # 256MB
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 2048M
+        reservations:
+          cpus: '1'
+          memory: 512M
+      placement:
+        constraints:
+          - node.labels.type == database
+
+  redis:
+    <<: *production-logging
+    command: >
+      redis-server
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --save "900 1 300 10 60 10000"
+      --loglevel warning
+      --requirepass ${REDIS_PASSWORD}
+      --tcp-backlog 511
+      --tcp-keepalive 300
+      --timeout 0
+      --databases 16
+      --stop-writes-on-bgsave-error yes
+      --rdbcompression yes
+      --rdbchecksum yes
+      --replica-read-only yes
+      --repl-diskless-sync no
+      --repl-diskless-sync-delay 5
+      --repl-disable-tcp-nodelay no
+      --replica-priority 100
+      --maxclients 10000
+      --lazyfree-lazy-eviction yes
+      --lazyfree-lazy-expire yes
+      --lazyfree-lazy-server-del yes
+      --replica-lazy-flush yes
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+      - redis_backup:/backup
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1536M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  rabbitmq:
+    <<: *production-logging
+    environment:
+      RABBITMQ_DEFAULT_USER_FILE: /run/secrets/rabbitmq_user
+      RABBITMQ_DEFAULT_PASS_FILE: /run/secrets/rabbitmq_password
+      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: 0.6
+      RABBITMQ_DISK_FREE_LIMIT: 5GB
+      RABBITMQ_HEARTBEAT: 60
+      RABBITMQ_FRAME_MAX: 131072
+      RABBITMQ_CHANNEL_MAX: 2047
+    secrets:
+      - rabbitmq_user
+      - rabbitmq_password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_config:/etc/rabbitmq
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # =============================================================================
+  # Observability Stack - Production Configuration
+  # =============================================================================
+
+  prometheus:
+    <<: *production-logging
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=50GB'
+      - '--web.enable-lifecycle'
+      - '--web.external-url=https://prometheus.example.com'
+      - '--log.level=warn'
+    volumes:
+      - prometheus_data:/prometheus
+      - ./configs/prometheus:/etc/prometheus:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      placement:
+        constraints:
+          - node.labels.type == monitoring
+
+  grafana:
+    <<: *production-logging
+    environment:
+      GF_SERVER_ROOT_URL: https://grafana.example.com
+      GF_SECURITY_ADMIN_USER_FILE: /run/secrets/grafana_admin_user
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_admin_password
+      GF_INSTALL_PLUGINS: ${GF_PLUGINS:-}
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: postgres:5432
+      GF_DATABASE_NAME: grafana
+      GF_DATABASE_USER: grafana
+      GF_DATABASE_PASSWORD__FILE: /run/secrets/grafana_db_password
+      GF_SESSION_PROVIDER: redis
+      GF_SESSION_PROVIDER_CONFIG: "addr=redis:6379,pool_size=100,password=${REDIS_PASSWORD}"
+      GF_LOG_MODE: console
+      GF_LOG_LEVEL: warn
+      GF_METRICS_ENABLED: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_STRICT_TRANSPORT_SECURITY: "true"
+      GF_SECURITY_CONTENT_SECURITY_POLICY: "true"
+    secrets:
+      - grafana_admin_user
+      - grafana_admin_password
+      - grafana_db_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  jaeger:
+    <<: *production-logging
+    environment:
+      SPAN_STORAGE_TYPE: elasticsearch
+      ES_SERVER_URLS: http://elasticsearch:9200
+      ES_USERNAME: elastic
+      ES_PASSWORD_FILE: /run/secrets/elasticsearch_password
+      COLLECTOR_OTLP_ENABLED: "true"
+      LOG_LEVEL: warn
+    secrets:
+      - elasticsearch_password
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # =============================================================================
+  # Application Services - Production Configuration
+  # =============================================================================
+
+  # api-gateway:
+  #   <<: *production-logging
+  #   <<: *deploy-policy
+  #   image: ${REGISTRY}/api-gateway:${VERSION}
+  #   environment:
+  #     ENVIRONMENT: production
+  #     LOG_LEVEL: warn
+  #     LOG_FORMAT: json
+  #     DATABASE_URL_FILE: /run/secrets/database_url
+  #     REDIS_URL_FILE: /run/secrets/redis_url
+  #     JWT_SECRET_FILE: /run/secrets/jwt_secret
+  #     # Performance tuning
+  #     GOMAXPROCS: 4
+  #     GOMEMLIMIT: 900MiB
+  #     # Observability
+  #     OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+  #     OTEL_SERVICE_NAME: api-gateway
+  #     METRICS_ADDR: :9090
+  #   secrets:
+  #     - database_url
+  #     - redis_url
+  #     - jwt_secret
+  #   healthcheck:
+  #     test: ["CMD", "/app/app", "health"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     start_period: 30s
+  #     retries: 5
+  #   networks:
+  #     - monorepo-network
+  #     - dmz-network
+
+  # =============================================================================
+  # Additional Production Services
+  # =============================================================================
+
+  nginx:
+    image: nginx:alpine
+    container_name: monorepo-nginx
+    <<: *production-logging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./configs/nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_cache:/var/cache/nginx
+      - ssl_certs:/etc/nginx/ssl:ro
+    deploy:
+      mode: global
+      resources:
+        limits:
+          cpus: '1'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+      placement:
+        constraints:
+          - node.role == manager
+    networks:
+      - dmz-network
+      - monorepo-network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    container_name: monorepo-elasticsearch
+    <<: *production-logging
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=true
+      - xpack.security.authc.api_key.enabled=true
+      - ELASTIC_PASSWORD_FILE=/run/secrets/elasticsearch_password
+    secrets:
+      - elasticsearch_password
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2048M
+        reservations:
+          cpus: '1'
+          memory: 1024M
+    networks:
+      - monorepo-network
+
+# =============================================================================
+# Networks
+# =============================================================================
+
+networks:
+  monorepo-network:
+    driver: overlay
+    encrypted: true
+    attachable: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.1.0/24
+
+  dmz-network:
+    driver: overlay
+    encrypted: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.2.0/24
+
+# =============================================================================
+# Volumes
+# =============================================================================
+
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/postgres
+  
+  postgres_backup:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /backup/postgres
+  
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/redis
+  
+  redis_backup:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /backup/redis
+  
+  rabbitmq_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/rabbitmq
+  
+  rabbitmq_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /etc/rabbitmq
+  
+  prometheus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/prometheus
+  
+  grafana_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/grafana
+  
+  elasticsearch_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/elasticsearch
+  
+  nginx_cache:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=100m,uid=1000,gid=1000
+  
+  ssl_certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /etc/ssl/certs
+
+# =============================================================================
+# Secrets
+# =============================================================================
+
+secrets:
+  postgres_password:
+    external: true
+  redis_password:
+    external: true
+  rabbitmq_user:
+    external: true
+  rabbitmq_password:
+    external: true
+  grafana_admin_user:
+    external: true
+  grafana_admin_password:
+    external: true
+  grafana_db_password:
+    external: true
+  elasticsearch_password:
+    external: true
+  database_url:
+    external: true
+  redis_url:
+    external: true
+  jwt_secret:
+    external: true

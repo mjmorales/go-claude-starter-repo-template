@@ -1,0 +1,792 @@
+# precommit.yml - Comprehensive precommit checks for Go projects
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  # Coverage thresholds
+  COVERAGE_THRESHOLD: '80'
+  MIN_COVERAGE_THRESHOLD: '70'
+  
+  # File size limits (in bytes)
+  MAX_FILE_SIZE: '1048576'  # 1MB
+  MAX_LINE_LENGTH: '120'
+  
+  # Git hooks directory
+  HOOKS_DIR: '.git/hooks'
+  
+  # Tools required for precommit checks
+  REQUIRED_TOOLS: 'goimports,staticcheck,golangci-lint,gosec,nancy,markdownlint-cli,git-secrets'
+
+env:
+  CGO_ENABLED: '0'
+  GO111MODULE: 'on'
+  # Ensure consistent output formatting
+  GOCOVERDIR: '{{.ROOT_DIR}}/coverage'
+  GOFLAGS: '-mod=readonly'
+
+tasks:
+  # ============================================================================
+  # Main Precommit Tasks
+  # ============================================================================
+
+  check:
+    desc: 'Run full precommit validation (all checks)'
+    summary: |
+      Comprehensive precommit validation including:
+      - Go code quality (fmt, imports, vet, lint)
+      - Security scanning (gosec, secrets)
+      - Testing (unit tests, coverage, race detection)
+      - Documentation validation
+      - Git hooks validation
+    cmds:
+      - echo "🔍 Running full precommit validation..."
+      - task: tools:verify
+      - task: go:check
+      - task: security:check
+      - task: test:check
+      - task: docs:check
+      - task: git:check
+      - task: quality:check
+      - echo "✅ All precommit checks passed!"
+
+  check:fast:
+    desc: 'Run fast precommit check for quick feedback'
+    summary: |
+      Quick precommit validation focusing on immediate issues:
+      - Go formatting and imports
+      - Basic linting
+      - Unit tests (no coverage)
+      - Critical security checks
+    cmds:
+      - echo "⚡ Running fast precommit check..."
+      - task: go:fmt:check
+      - task: go:imports:check
+      - task: go:vet
+      - task: test:unit:fast
+      - task: security:secrets
+      - task: quality:conflicts
+      - echo "✅ Fast precommit check passed!"
+
+  fix:
+    desc: 'Auto-fix issues that can be resolved automatically'
+    summary: |
+      Automatically fix common issues:
+      - Format Go code (gofmt)
+      - Fix imports (goimports)
+      - Tidy go.mod files
+      - Fix markdown formatting
+    cmds:
+      - echo "🔧 Auto-fixing common issues..."
+      - task: go:fmt:fix
+      - task: go:imports:fix
+      - task: go:mod:tidy
+      - task: docs:markdown:fix
+      - echo "✅ Auto-fix completed!"
+
+  install:hooks:
+    desc: 'Install git hooks for precommit validation'
+    summary: |
+      Installs git hooks to run precommit checks automatically:
+      - pre-commit: runs fast checks
+      - pre-push: runs full validation
+      - commit-msg: validates commit message format
+    cmds:
+      - task: hooks:install
+
+  # ============================================================================
+  # Go-Specific Checks
+  # ============================================================================
+
+  go:check:
+    desc: 'Run all Go-specific checks'
+    cmds:
+      - task: go:fmt:check
+      - task: go:imports:check
+      - task: go:vet
+      - task: go:staticcheck
+      - task: go:lint
+      - task: go:mod:verify
+      - task: go:mod:check
+
+  go:fmt:check:
+    desc: 'Check Go code formatting'
+    cmds:
+      - |
+        echo "🔍 Checking Go formatting..."
+        unformatted=$(find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs gofmt -l)
+        if [ -n "$unformatted" ]; then
+          echo "❌ The following files are not formatted:"
+          echo "$unformatted"
+          echo "Run 'task precommit:go:fmt:fix' to fix formatting issues"
+          exit 1
+        fi
+        echo "✅ All Go files are properly formatted"
+
+  go:fmt:fix:
+    desc: 'Fix Go code formatting'
+    cmds:
+      - |
+        echo "🔧 Fixing Go formatting..."
+        find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs gofmt -w
+        echo "✅ Go formatting fixed"
+
+  go:imports:check:
+    desc: 'Check Go imports organization'
+    cmds:
+      - |
+        echo "🔍 Checking Go imports..."
+        if ! command -v goimports >/dev/null 2>&1; then
+          echo "❌ goimports not found. Install with: go install golang.org/x/tools/cmd/goimports@latest"
+          exit 1
+        fi
+        unorganized=$(find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs goimports -l)
+        if [ -n "$unorganized" ]; then
+          echo "❌ The following files have unorganized imports:"
+          echo "$unorganized"
+          echo "Run 'task precommit:go:imports:fix' to fix import issues"
+          exit 1
+        fi
+        echo "✅ All Go imports are properly organized"
+
+  go:imports:fix:
+    desc: 'Fix Go imports organization'
+    cmds:
+      - |
+        echo "🔧 Fixing Go imports..."
+        if ! command -v goimports >/dev/null 2>&1; then
+          echo "❌ goimports not found. Install with: go install golang.org/x/tools/cmd/goimports@latest"
+          exit 1
+        fi
+        find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs goimports -w
+        echo "✅ Go imports fixed"
+
+  go:vet:
+    desc: 'Run go vet for suspicious code'
+    cmds:
+      - |
+        echo "🔍 Running go vet..."
+        if ! go vet ./...; then
+          echo "❌ go vet found issues"
+          exit 1
+        fi
+        echo "✅ go vet passed"
+
+  go:staticcheck:
+    desc: 'Run staticcheck for advanced static analysis'
+    cmds:
+      - |
+        echo "🔍 Running staticcheck..."
+        if ! command -v staticcheck >/dev/null 2>&1; then
+          echo "❌ staticcheck not found. Install with: go install honnef.co/go/tools/cmd/staticcheck@latest"
+          exit 1
+        fi
+        if ! staticcheck ./...; then
+          echo "❌ staticcheck found issues"
+          exit 1
+        fi
+        echo "✅ staticcheck passed"
+
+  go:lint:
+    desc: 'Run golangci-lint for comprehensive linting'
+    cmds:
+      - |
+        echo "🔍 Running golangci-lint..."
+        if ! command -v golangci-lint >/dev/null 2>&1; then
+          echo "❌ golangci-lint not found. Install from: https://golangci-lint.run/usage/install/"
+          exit 1
+        fi
+        if ! golangci-lint run --timeout=5m; then
+          echo "❌ golangci-lint found issues"
+          exit 1
+        fi
+        echo "✅ golangci-lint passed"
+
+  go:mod:verify:
+    desc: 'Verify go.mod dependencies'
+    cmds:
+      - |
+        echo "🔍 Verifying go.mod..."
+        if ! go mod verify; then
+          echo "❌ go mod verify failed"
+          exit 1
+        fi
+        echo "✅ go.mod verified"
+
+  go:mod:check:
+    desc: 'Check if go.mod is tidy'
+    cmds:
+      - |
+        echo "🔍 Checking go.mod tidiness..."
+        go mod tidy
+        if ! git diff --exit-code go.mod go.sum; then
+          echo "❌ go.mod or go.sum is not tidy"
+          echo "Run 'go mod tidy' to fix"
+          exit 1
+        fi
+        echo "✅ go.mod is tidy"
+
+  go:mod:tidy:
+    desc: 'Tidy go.mod files'
+    cmds:
+      - |
+        echo "🔧 Tidying go.mod..."
+        go mod tidy
+        echo "✅ go.mod tidied"
+
+  # ============================================================================
+  # Code Quality Checks
+  # ============================================================================
+
+  quality:check:
+    desc: 'Run all code quality checks'
+    cmds:
+      - task: quality:todos
+      - task: quality:debug
+      - task: quality:filesize
+      - task: quality:linelength
+      - task: quality:conflicts
+
+  quality:todos:
+    desc: 'Check for TODO/FIXME comments'
+    cmds:
+      - |
+        echo "🔍 Checking for TODO/FIXME comments..."
+        todos=$(find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n -i -E "(TODO|FIXME|XXX|HACK)" || true)
+        if [ -n "$todos" ]; then
+          echo "⚠️  Found TODO/FIXME comments:"
+          echo "$todos"
+          echo "Consider addressing these before committing"
+        else
+          echo "✅ No TODO/FIXME comments found"
+        fi
+
+  quality:debug:
+    desc: 'Check for debugging statements in non-test files'
+    cmds:
+      - |
+        echo "🔍 Checking for debug statements..."
+        debug=$(find . -name "*.go" -not -name "*_test.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n -E "(fmt\.Print|log\.Print)" || true)
+        if [ -n "$debug" ]; then
+          echo "❌ Found debugging statements in non-test files:"
+          echo "$debug"
+          echo "Remove debugging statements before committing"
+          exit 1
+        fi
+        echo "✅ No debugging statements found"
+
+  quality:filesize:
+    desc: 'Check for large files'
+    cmds:
+      - |
+        echo "🔍 Checking file sizes..."
+        large_files=$(find . -type f -not -path "./vendor/*" -not -path "./.git/*" -not -path "./node_modules/*" -size +{{.MAX_FILE_SIZE}}c || true)
+        if [ -n "$large_files" ]; then
+          echo "⚠️  Found large files (>1MB):"
+          echo "$large_files"
+          echo "Consider using Git LFS for large files"
+        else
+          echo "✅ No large files found"
+        fi
+
+  quality:linelength:
+    desc: 'Check line length limits'
+    cmds:
+      - |
+        echo "🔍 Checking line lengths..."
+        long_lines=$(find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n ".\{{{.MAX_LINE_LENGTH}}\}" || true)
+        if [ -n "$long_lines" ]; then
+          echo "⚠️  Found lines longer than {{.MAX_LINE_LENGTH}} characters:"
+          echo "$long_lines" | head -10
+          if [ $(echo "$long_lines" | wc -l) -gt 10 ]; then
+            echo "... and $(echo "$long_lines" | wc -l | sed 's/^[ \t]*//') more"
+          fi
+          echo "Consider breaking long lines for better readability"
+        else
+          echo "✅ All lines within length limit"
+        fi
+
+  quality:conflicts:
+    desc: 'Check for merge conflict markers'
+    cmds:
+      - |
+        echo "🔍 Checking for merge conflict markers..."
+        conflicts=$(find . -type f -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -l -E "(<{7}|={7}|>{7})" || true)
+        if [ -n "$conflicts" ]; then
+          echo "❌ Found merge conflict markers in:"
+          echo "$conflicts"
+          echo "Resolve merge conflicts before committing"
+          exit 1
+        fi
+        echo "✅ No merge conflict markers found"
+
+  # ============================================================================
+  # Testing Requirements
+  # ============================================================================
+
+  test:check:
+    desc: 'Run all testing requirements'
+    cmds:
+      - task: test:unit
+      - task: test:coverage
+      - task: test:race
+
+  test:unit:
+    desc: 'Run unit tests with coverage'
+    cmds:
+      - |
+        echo "🧪 Running unit tests..."
+        mkdir -p coverage
+        if ! go test -v -coverprofile=coverage/coverage.out -covermode=atomic ./...; then
+          echo "❌ Unit tests failed"
+          exit 1
+        fi
+        echo "✅ Unit tests passed"
+
+  test:unit:fast:
+    desc: 'Run unit tests without coverage for speed'
+    cmds:
+      - |
+        echo "⚡ Running fast unit tests..."
+        if ! go test -short ./...; then
+          echo "❌ Unit tests failed"
+          exit 1
+        fi
+        echo "✅ Fast unit tests passed"
+
+  test:coverage:
+    desc: 'Check test coverage thresholds'
+    deps: [test:unit]
+    cmds:
+      - |
+        echo "📊 Checking test coverage..."
+        if [ ! -f coverage/coverage.out ]; then
+          echo "❌ Coverage file not found. Run unit tests first."
+          exit 1
+        fi
+        
+        coverage=$(go tool cover -func=coverage/coverage.out | grep "total:" | awk '{print $3}' | sed 's/%//')
+        echo "Current coverage: ${coverage}%"
+        
+        if (( $(echo "$coverage < {{.MIN_COVERAGE_THRESHOLD}}" | bc -l) )); then
+          echo "❌ Coverage ${coverage}% is below minimum threshold {{.MIN_COVERAGE_THRESHOLD}}%"
+          exit 1
+        elif (( $(echo "$coverage < {{.COVERAGE_THRESHOLD}}" | bc -l) )); then
+          echo "⚠️  Coverage ${coverage}% is below target threshold {{.COVERAGE_THRESHOLD}}%"
+        else
+          echo "✅ Coverage ${coverage}% meets threshold"
+        fi
+
+  test:race:
+    desc: 'Run tests with race detector'
+    cmds:
+      - |
+        echo "🏁 Running race detector..."
+        if ! go test -race -short ./...; then
+          echo "❌ Race detector found issues"
+          exit 1
+        fi
+        echo "✅ No race conditions detected"
+
+  # ============================================================================
+  # Documentation Checks
+  # ============================================================================
+
+  docs:check:
+    desc: 'Run all documentation checks'
+    cmds:
+      - task: docs:packages
+      - task: docs:markdown
+      - task: docs:links
+
+  docs:packages:
+    desc: 'Check for missing package documentation'
+    cmds:
+      - |
+        echo "📚 Checking package documentation..."
+        missing_docs=$(find . -name "*.go" -not -name "*_test.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -L "^// Package " | grep -v "/main.go" || true)
+        if [ -n "$missing_docs" ]; then
+          echo "⚠️  Files missing package documentation:"
+          echo "$missing_docs"
+          echo "Consider adding package documentation"
+        else
+          echo "✅ All packages have documentation"
+        fi
+
+  docs:markdown:
+    desc: 'Validate markdown files'
+    cmds:
+      - |
+        echo "📝 Validating markdown files..."
+        if command -v markdownlint >/dev/null 2>&1; then
+          if ! markdownlint **/*.md; then
+            echo "❌ Markdown validation failed"
+            exit 1
+          fi
+          echo "✅ Markdown files are valid"
+        else
+          echo "⚠️  markdownlint not found. Install with: npm install -g markdownlint-cli"
+        fi
+
+  docs:markdown:fix:
+    desc: 'Auto-fix markdown formatting'
+    cmds:
+      - |
+        echo "🔧 Fixing markdown formatting..."
+        if command -v markdownlint >/dev/null 2>&1; then
+          markdownlint --fix **/*.md || true
+          echo "✅ Markdown formatting fixed"
+        else
+          echo "⚠️  markdownlint not found. Install with: npm install -g markdownlint-cli"
+        fi
+
+  docs:links:
+    desc: 'Check for broken links in documentation'
+    cmds:
+      - |
+        echo "🔗 Checking for broken links..."
+        # Simple check for markdown links - could be enhanced with proper link checker
+        broken_links=$(find . -name "*.md" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n "\[.*\](.*)" | grep -E "\[.*\]\(.*\)" | grep -v "http" | grep -E "\[.*\]\([^)]*\)" || true)
+        if [ -n "$broken_links" ]; then
+          echo "⚠️  Potential broken links found (manual verification recommended):"
+          echo "$broken_links" | head -10
+        else
+          echo "✅ No obvious broken links found"
+        fi
+
+  # ============================================================================
+  # Git-Specific Checks
+  # ============================================================================
+
+  git:check:
+    desc: 'Run all git-specific checks'
+    cmds:
+      - task: git:branch
+      - task: git:files
+      - task: git:secrets:verify
+
+  git:branch:
+    desc: 'Validate branch naming convention'
+    cmds:
+      - |
+        echo "🌿 Checking branch name..."
+        branch=$(git rev-parse --abbrev-ref HEAD)
+        if [[ "$branch" =~ ^(feature|bugfix|hotfix|chore|docs|refactor)/.+ ]]; then
+          echo "✅ Branch name '$branch' follows convention"
+        elif [ "$branch" = "main" ] || [ "$branch" = "master" ] || [ "$branch" = "develop" ]; then
+          echo "✅ Branch name '$branch' is a main branch"
+        else
+          echo "⚠️  Branch name '$branch' doesn't follow convention"
+          echo "Consider using: feature/*, bugfix/*, hotfix/*, chore/*, docs/*, refactor/*"
+        fi
+
+  git:files:
+    desc: 'Check for large files in git history'
+    cmds:
+      - |
+        echo "📁 Checking for large files..."
+        large_files=$(git ls-files | xargs ls -l | awk '{if ($5 > {{.MAX_FILE_SIZE}}) print $9, $5}' || true)
+        if [ -n "$large_files" ]; then
+          echo "⚠️  Large files found in git:"
+          echo "$large_files"
+          echo "Consider using Git LFS for large files"
+        else
+          echo "✅ No large files in git"
+        fi
+
+  git:secrets:verify:
+    desc: 'Verify git-secrets is properly configured'
+    cmds:
+      - |
+        echo "🔐 Verifying git-secrets configuration..."
+        if command -v git-secrets >/dev/null 2>&1; then
+          if git secrets --list >/dev/null 2>&1; then
+            echo "✅ git-secrets is configured"
+          else
+            echo "⚠️  git-secrets found but not configured"
+            echo "Run 'git secrets --install' to set up"
+          fi
+        else
+          echo "⚠️  git-secrets not found. Install from: https://github.com/awslabs/git-secrets"
+        fi
+
+  # ============================================================================
+  # Security Checks
+  # ============================================================================
+
+  security:check:
+    desc: 'Run all security checks'
+    cmds:
+      - task: security:gosec
+      - task: security:deps
+      - task: security:secrets
+
+  security:gosec:
+    desc: 'Run gosec for security vulnerabilities'
+    cmds:
+      - |
+        echo "🔒 Running gosec security scan..."
+        if ! command -v gosec >/dev/null 2>&1; then
+          echo "❌ gosec not found. Install with: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest"
+          exit 1
+        fi
+        if ! gosec -fmt=json -out=gosec-report.json -stdout -severity=medium ./...; then
+          echo "❌ gosec found security issues"
+          if [ -f gosec-report.json ]; then
+            echo "See gosec-report.json for details"
+          fi
+          exit 1
+        fi
+        echo "✅ gosec security scan passed"
+
+  security:deps:
+    desc: 'Check dependencies for vulnerabilities'
+    cmds:
+      - |
+        echo "📦 Checking dependencies for vulnerabilities..."
+        if command -v nancy >/dev/null 2>&1; then
+          if ! go list -json -deps | nancy sleuth; then
+            echo "❌ Vulnerable dependencies found"
+            exit 1
+          fi
+          echo "✅ No vulnerable dependencies found"
+        else
+          echo "⚠️  nancy not found. Install with: go install github.com/sonatypecommunity/nancy@latest"
+          echo "Alternatively, use 'go mod audit' if available"
+        fi
+
+  security:secrets:
+    desc: 'Scan for hardcoded secrets'
+    cmds:
+      - |
+        echo "🔍 Scanning for hardcoded secrets..."
+        # Basic pattern matching for common secrets
+        secrets=$(find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -i -E "(password|secret|key|token|api_key)" | grep -v "_test.go" | grep -E "(=|:)" || true)
+        if [ -n "$secrets" ]; then
+          echo "⚠️  Potential secrets found (manual review required):"
+          echo "$secrets" | head -5
+          echo "Review these findings manually"
+        else
+          echo "✅ No obvious secrets found"
+        fi
+
+  # ============================================================================
+  # Performance Checks
+  # ============================================================================
+
+  performance:check:
+    desc: 'Run performance checks and benchmarks'
+    cmds:
+      - task: performance:antipatterns
+      - task: performance:benchmarks
+
+  performance:antipatterns:
+    desc: 'Check for common performance anti-patterns'
+    cmds:
+      - |
+        echo "🚀 Checking for performance anti-patterns..."
+        # Check for string concatenation in loops
+        antipatterns=$(find . -name "*.go" -not -path "./vendor/*" -not -path "./.git/*" | xargs grep -n -E "(for.*\+.*string|for.*fmt\.Sprintf)" || true)
+        if [ -n "$antipatterns" ]; then
+          echo "⚠️  Potential performance anti-patterns found:"
+          echo "$antipatterns"
+          echo "Consider using strings.Builder for string concatenation in loops"
+        else
+          echo "✅ No obvious performance anti-patterns found"
+        fi
+
+  performance:benchmarks:
+    desc: 'Run benchmarks if performance-sensitive files changed'
+    cmds:
+      - |
+        echo "📊 Running benchmarks..."
+        benchmarks=$(find . -name "*_test.go" -not -path "./vendor/*" | xargs grep -l "func Benchmark" || true)
+        if [ -n "$benchmarks" ]; then
+          echo "Found benchmark tests, running..."
+          if ! go test -bench=. -benchmem ./...; then
+            echo "❌ Benchmarks failed"
+            exit 1
+          fi
+          echo "✅ Benchmarks completed"
+        else
+          echo "✅ No benchmark tests found"
+        fi
+
+  # ============================================================================
+  # Tool Management
+  # ============================================================================
+
+  tools:verify:
+    desc: 'Verify all required tools are installed'
+    cmds:
+      - |
+        echo "🔧 Verifying required tools..."
+        missing_tools=""
+        
+        # Check Go tools
+        for tool in goimports staticcheck golangci-lint gosec; do
+          if ! command -v $tool >/dev/null 2>&1; then
+            missing_tools="$missing_tools $tool"
+          fi
+        done
+        
+        # Check external tools
+        for tool in git markdownlint; do
+          if ! command -v $tool >/dev/null 2>&1; then
+            missing_tools="$missing_tools $tool"
+          fi
+        done
+        
+        if [ -n "$missing_tools" ]; then
+          echo "❌ Missing required tools:$missing_tools"
+          echo "Run 'task precommit:tools:install' to install missing tools"
+          exit 1
+        fi
+        
+        echo "✅ All required tools are installed"
+
+  tools:install:
+    desc: 'Install required precommit tools'
+    cmds:
+      - |
+        echo "📦 Installing required tools..."
+        
+        # Install Go tools
+        echo "Installing Go tools..."
+        go install golang.org/x/tools/cmd/goimports@latest
+        go install honnef.co/go/tools/cmd/staticcheck@latest
+        go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+        go install github.com/sonatypecommunity/nancy@latest
+        
+        # Install golangci-lint
+        if ! command -v golangci-lint >/dev/null 2>&1; then
+          echo "Installing golangci-lint..."
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+        fi
+        
+        echo "✅ Tools installation completed"
+        echo "Note: Some tools (markdownlint, git-secrets) may need manual installation"
+
+  # ============================================================================
+  # Git Hooks Management
+  # ============================================================================
+
+  hooks:install:
+    desc: 'Install git hooks for automated precommit checks'
+    cmds:
+      - mkdir -p {{.HOOKS_DIR}}
+      - task: hooks:pre-commit
+      - task: hooks:pre-push
+      - task: hooks:commit-msg
+      - chmod +x {{.HOOKS_DIR}}/pre-commit {{.HOOKS_DIR}}/pre-push {{.HOOKS_DIR}}/commit-msg
+      - echo "✅ Git hooks installed successfully"
+
+  hooks:pre-commit:
+    desc: 'Install pre-commit hook'
+    cmds:
+      - |
+        cat > {{.HOOKS_DIR}}/pre-commit << 'EOF'
+        #!/bin/bash
+        # Pre-commit hook - runs fast precommit checks
+        
+        echo "🔍 Running pre-commit checks..."
+        
+        if ! task precommit:check:fast; then
+          echo "❌ Pre-commit checks failed"
+          echo "Fix the issues above or use 'git commit --no-verify' to skip (not recommended)"
+          exit 1
+        fi
+        
+        echo "✅ Pre-commit checks passed"
+        EOF
+
+  hooks:pre-push:
+    desc: 'Install pre-push hook'
+    cmds:
+      - |
+        cat > {{.HOOKS_DIR}}/pre-push << 'EOF'
+        #!/bin/bash
+        # Pre-push hook - runs full precommit validation
+        
+        echo "🔍 Running pre-push validation..."
+        
+        if ! task precommit:check; then
+          echo "❌ Pre-push validation failed"
+          echo "Fix the issues above or use 'git push --no-verify' to skip (not recommended)"
+          exit 1
+        fi
+        
+        echo "✅ Pre-push validation passed"
+        EOF
+
+  hooks:commit-msg:
+    desc: 'Install commit message validation hook'
+    cmds:
+      - |
+        cat > {{.HOOKS_DIR}}/commit-msg << 'EOF'
+        #!/bin/bash
+        # Commit message hook - validates commit message format
+        
+        commit_regex='^(feat|fix|docs|style|refactor|test|chore|perf|build|ci|revert)(\(.+\))?: .{1,50}'
+        
+        if ! grep -qE "$commit_regex" "$1"; then
+          echo "❌ Invalid commit message format"
+          echo "Format: type(scope): description"
+          echo "Types: feat, fix, docs, style, refactor, test, chore, perf, build, ci, revert"
+          echo "Example: feat(auth): add user login functionality"
+          exit 1
+        fi
+        
+        echo "✅ Commit message format is valid"
+        EOF
+
+  hooks:uninstall:
+    desc: 'Remove installed git hooks'
+    cmds:
+      - rm -f {{.HOOKS_DIR}}/pre-commit {{.HOOKS_DIR}}/pre-push {{.HOOKS_DIR}}/commit-msg
+      - echo "✅ Git hooks removed"
+
+  # ============================================================================
+  # Utility Tasks
+  # ============================================================================
+
+  clean:
+    desc: 'Clean precommit artifacts'
+    cmds:
+      - rm -rf coverage/ gosec-report.json
+      - echo "✅ Precommit artifacts cleaned"
+
+  status:
+    desc: 'Show precommit configuration status'
+    silent: true
+    cmds:
+      - |
+        echo "📋 Precommit Configuration Status"
+        echo "================================="
+        echo ""
+        echo "📊 Coverage Thresholds:"
+        echo "  Target: {{.COVERAGE_THRESHOLD}}%"
+        echo "  Minimum: {{.MIN_COVERAGE_THRESHOLD}}%"
+        echo ""
+        echo "📏 File Limits:"
+        echo "  Max file size: {{.MAX_FILE_SIZE}} bytes (1MB)"
+        echo "  Max line length: {{.MAX_LINE_LENGTH}} characters"
+        echo ""
+        echo "🔧 Git Hooks:"
+        if [ -f {{.HOOKS_DIR}}/pre-commit ]; then
+          echo "  ✅ pre-commit hook installed"
+        else
+          echo "  ❌ pre-commit hook not installed"
+        fi
+        if [ -f {{.HOOKS_DIR}}/pre-push ]; then
+          echo "  ✅ pre-push hook installed"
+        else
+          echo "  ❌ pre-push hook not installed"
+        fi
+        if [ -f {{.HOOKS_DIR}}/commit-msg ]; then
+          echo "  ✅ commit-msg hook installed"
+        else
+          echo "  ❌ commit-msg hook not installed"
+        fi
+        echo ""
+        echo "Run 'task precommit:tools:verify' to check tool availability"

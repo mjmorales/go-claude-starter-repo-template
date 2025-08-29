@@ -1,0 +1,279 @@
+# .task/release.yml - Release and distribution task definitions
+version: '3'
+
+vars:
+  DIST_DIR: "{{.MONOREPO_ROOT}}/dist"
+  RELEASE_DIR: "{{.MONOREPO_ROOT}}/releases"
+  PLATFORMS: "linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
+
+tasks:
+  all:
+    desc: Build release binaries for all services and platforms
+    deps: [test:all, lint:all]
+    cmds:
+      - task: clean
+      - mkdir -p {{.DIST_DIR}}
+      - |
+        for service in {{.SERVICES}}; do
+          task release:service NAME=$service
+        done
+      - task: checksums
+      - task: archive
+      - echo "✅ Release artifacts created in {{.DIST_DIR}}"
+
+  service:
+    desc: Build release binaries for a specific service
+    vars:
+      SERVICE_PATH: "{{.MONOREPO_ROOT}}/cmd/{{.NAME}}"
+    cmds:
+      - |
+        if [ ! -f "{{.SERVICE_PATH}}/main.go" ]; then
+          echo "❌ Service {{.NAME}} not found"
+          exit 1
+        fi
+        
+        echo "📦 Building release for {{.NAME}}..."
+        
+        for platform in {{.PLATFORMS}}; do
+          GOOS=$(echo $platform | cut -d'/' -f1)
+          GOARCH=$(echo $platform | cut -d'/' -f2)
+          OUTPUT="{{.DIST_DIR}}/{{.NAME}}_${GOOS}_${GOARCH}"
+          
+          if [ "$GOOS" = "windows" ]; then
+            OUTPUT="${OUTPUT}.exe"
+          fi
+          
+          echo "  Building for $GOOS/$GOARCH..."
+          
+          cd {{.SERVICE_PATH}}
+          CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
+            go build {{.LDFLAGS}} -o "$OUTPUT" .
+        done
+        
+        echo "✅ Release binaries for {{.NAME}} created"
+    requires:
+      vars: [NAME]
+
+  checksums:
+    desc: Generate checksums for release artifacts
+    cmds:
+      - |
+        echo "🔐 Generating checksums..."
+        cd {{.DIST_DIR}}
+        
+        if [ "$(uname)" = "Darwin" ]; then
+          shasum -a 256 * > checksums.txt
+        else
+          sha256sum * > checksums.txt
+        fi
+        
+        echo "✅ Checksums generated: {{.DIST_DIR}}/checksums.txt"
+
+  archive:
+    desc: Create tar.gz archives for each platform
+    cmds:
+      - |
+        echo "📦 Creating archives..."
+        cd {{.DIST_DIR}}
+        
+        for binary in $(find . -type f -name "*_*_*" ! -name "*.tar.gz" ! -name "checksums.txt"); do
+          name=$(basename "$binary" | sed 's/\.[^.]*$//')
+          tar czf "${name}.tar.gz" "$(basename $binary)"
+          rm "$binary"
+        done
+        
+        echo "✅ Archives created"
+
+  tag:
+    desc: Create and push git tag
+    vars:
+      TAG: "{{.TAG}}"
+    cmds:
+      - |
+        if [ -z "{{.TAG}}" ]; then
+          echo "❌ TAG variable required (e.g., task release:tag TAG=v1.0.0)"
+          exit 1
+        fi
+        
+        echo "🏷️  Creating tag {{.TAG}}..."
+        git tag -a {{.TAG}} -m "Release {{.TAG}}"
+        git push origin {{.TAG}}
+        echo "✅ Tag {{.TAG}} created and pushed"
+    requires:
+      vars: [TAG]
+
+  changelog:
+    desc: Generate changelog
+    vars:
+      FROM: "{{.FROM}}"
+      TO: "{{.TO}}"
+    cmds:
+      - |
+        echo "📝 Generating changelog..."
+        
+        if [ -z "{{.FROM}}" ]; then
+          FROM=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        else
+          FROM="{{.FROM}}"
+        fi
+        
+        if [ -z "{{.TO}}" ]; then
+          TO="HEAD"
+        else
+          TO="{{.TO}}"
+        fi
+        
+        if [ -z "$FROM" ]; then
+          echo "## Changelog"
+          echo ""
+          git log --pretty=format:"- %s (%h)" $TO
+        else
+          echo "## Changelog ($FROM..$TO)"
+          echo ""
+          git log --pretty=format:"- %s (%h)" $FROM..$TO
+        fi > CHANGELOG.md
+        
+        echo "✅ Changelog generated: CHANGELOG.md"
+
+  notes:
+    desc: Generate release notes
+    cmds:
+      - |
+        echo "📝 Generating release notes..."
+        
+        cat > RELEASE_NOTES.md <<EOF
+        # Release {{.VERSION}}
+        
+        Release Date: $(date +"%Y-%m-%d")
+        
+        ## What's New
+        
+        <!-- Add new features here -->
+        
+        ## Bug Fixes
+        
+        <!-- Add bug fixes here -->
+        
+        ## Breaking Changes
+        
+        <!-- Add breaking changes here -->
+        
+        ## Contributors
+        
+        $(git log --format='- %aN' $(git describe --tags --abbrev=0 2>/dev/null)..HEAD 2>/dev/null | sort -u)
+        
+        ## Checksums
+        
+        \`\`\`
+        $(cat {{.DIST_DIR}}/checksums.txt 2>/dev/null || echo "Run 'task release:all' to generate checksums")
+        \`\`\`
+        EOF
+        
+        echo "✅ Release notes template created: RELEASE_NOTES.md"
+
+  github:
+    desc: Create GitHub release
+    vars:
+      TAG: "{{.TAG}}"
+    cmds:
+      - |
+        if [ -z "{{.TAG}}" ]; then
+          echo "❌ TAG variable required"
+          exit 1
+        fi
+        
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "❌ GitHub CLI (gh) not installed"
+          echo "Install from: https://cli.github.com/"
+          exit 1
+        fi
+        
+        echo "🚀 Creating GitHub release {{.TAG}}..."
+        
+        gh release create {{.TAG}} \
+          --title "Release {{.TAG}}" \
+          --notes-file RELEASE_NOTES.md \
+          {{.DIST_DIR}}/*.tar.gz \
+          {{.DIST_DIR}}/checksums.txt
+        
+        echo "✅ GitHub release {{.TAG}} created"
+    requires:
+      vars: [TAG]
+
+  docker:
+    desc: Build and push Docker images for release
+    vars:
+      TAG: "{{.TAG}}"
+    cmds:
+      - |
+        if [ -z "{{.TAG}}" ]; then
+          TAG="{{.VERSION}}"
+        else
+          TAG="{{.TAG}}"
+        fi
+        
+        echo "🐳 Building Docker images for release $TAG..."
+        
+        for service in {{.SERVICES}}; do
+          task docker:build:service NAME=$service
+          task docker:tag NAME=$service TAG=$TAG
+          task docker:push:service NAME=$service TAG=$TAG
+        done
+        
+        echo "✅ Docker images released with tag $TAG"
+
+  clean:
+    desc: Clean release artifacts
+    cmds:
+      - rm -rf {{.DIST_DIR}}
+      - rm -rf {{.RELEASE_DIR}}
+      - rm -f CHANGELOG.md RELEASE_NOTES.md
+      - echo "✅ Release artifacts cleaned"
+
+  version:bump:
+    desc: Bump version (major, minor, patch)
+    vars:
+      TYPE: "{{.TYPE}}"
+    cmds:
+      - |
+        if [ -z "{{.TYPE}}" ]; then
+          echo "❌ TYPE required (major, minor, patch)"
+          echo "Usage: task release:version:bump TYPE=patch"
+          exit 1
+        fi
+        
+        # Get current version
+        CURRENT=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        CURRENT=${CURRENT#v}
+        
+        # Parse version
+        MAJOR=$(echo $CURRENT | cut -d. -f1)
+        MINOR=$(echo $CURRENT | cut -d. -f2)
+        PATCH=$(echo $CURRENT | cut -d. -f3)
+        
+        # Bump version
+        case "{{.TYPE}}" in
+          major)
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+            ;;
+          minor)
+            MINOR=$((MINOR + 1))
+            PATCH=0
+            ;;
+          patch)
+            PATCH=$((PATCH + 1))
+            ;;
+          *)
+            echo "❌ Invalid TYPE: {{.TYPE}}"
+            exit 1
+            ;;
+        esac
+        
+        NEW="v${MAJOR}.${MINOR}.${PATCH}"
+        echo "Version: $CURRENT -> $NEW"
+        echo ""
+        echo "Run: task release:tag TAG=$NEW"
+    requires:
+      vars: [TYPE]

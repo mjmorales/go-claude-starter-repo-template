@@ -1,0 +1,237 @@
+# .task/deps.yml - Dependency management task definitions
+version: '3'
+
+tasks:
+  update:
+    desc: Update all dependencies
+    cmds:
+      - task: download
+      - task: tidy
+      - task: verify
+      - echo "✅ Dependencies updated"
+
+  download:
+    desc: Download all dependencies
+    cmds:
+      - |
+        echo "📦 Downloading dependencies..."
+        go mod download
+        
+        # Download for service modules
+        for dir in {{.MONOREPO_ROOT}}/cmd/*/; do
+          if [ -f "$dir/go.mod" ]; then
+            echo "  Downloading for $(basename $dir)..."
+            (cd "$dir" && go mod download)
+          fi
+        done
+        
+        echo "✅ Dependencies downloaded"
+
+  tidy:
+    desc: Tidy all go.mod files
+    cmds:
+      - |
+        echo "🧹 Tidying go.mod files..."
+        
+        # Main module
+        go mod tidy
+        
+        # Service modules
+        for dir in {{.MONOREPO_ROOT}}/cmd/*/; do
+          if [ -f "$dir/go.mod" ]; then
+            echo "  Tidying $(basename $dir)..."
+            (cd "$dir" && go mod tidy)
+          fi
+        done
+        
+        # Sync workspace if exists
+        if [ -f "{{.MONOREPO_ROOT}}/go.work" ]; then
+          echo "  Syncing workspace..."
+          go work sync
+        fi
+        
+        echo "✅ All go.mod files tidied"
+
+  verify:
+    desc: Verify module dependencies
+    cmds:
+      - |
+        echo "🔍 Verifying dependencies..."
+        go mod verify
+        
+        for dir in {{.MONOREPO_ROOT}}/cmd/*/; do
+          if [ -f "$dir/go.mod" ]; then
+            echo "  Verifying $(basename $dir)..."
+            (cd "$dir" && go mod verify)
+          fi
+        done
+        
+        echo "✅ Dependencies verified"
+
+  upgrade:
+    desc: Upgrade all dependencies to latest versions
+    cmds:
+      - |
+        echo "⬆️  Upgrading dependencies..."
+        
+        # Main module
+        echo "Upgrading main module..."
+        go get -u ./...
+        go mod tidy
+        
+        # Service modules
+        for dir in {{.MONOREPO_ROOT}}/cmd/*/; do
+          if [ -f "$dir/go.mod" ]; then
+            echo "Upgrading $(basename $dir)..."
+            (cd "$dir" && go get -u ./... && go mod tidy)
+          fi
+        done
+        
+        echo "✅ Dependencies upgraded"
+
+  upgrade:minor:
+    desc: Upgrade to latest minor versions
+    cmds:
+      - |
+        echo "⬆️  Upgrading to latest minor versions..."
+        go get -u=patch ./...
+        go mod tidy
+        echo "✅ Minor version upgrades complete"
+
+  list:
+    desc: List all dependencies
+    cmds:
+      - |
+        echo "📋 Dependencies:"
+        echo "==============="
+        go list -m all
+
+  list:direct:
+    desc: List direct dependencies only
+    cmds:
+      - |
+        echo "📋 Direct Dependencies:"
+        echo "======================"
+        go list -m -f '{{if not .Indirect}}{{.Path}} {{.Version}}{{end}}' all | grep -v '^$'
+
+  list:updates:
+    desc: List available updates
+    cmds:
+      - |
+        echo "📋 Available Updates:"
+        echo "===================="
+        go list -u -m all | grep '\['
+
+  graph:
+    desc: Show dependency graph
+    cmds:
+      - |
+        echo "📊 Dependency Graph:"
+        echo "==================="
+        go mod graph
+
+  why:
+    desc: Show why a package is needed
+    vars:
+      PKG: "{{.PKG}}"
+    cmds:
+      - |
+        if [ -z "{{.PKG}}" ]; then
+          echo "❌ PKG variable required"
+          echo "Usage: task deps:why PKG=github.com/some/package"
+          exit 1
+        fi
+        
+        echo "🔍 Why {{.PKG}} is needed:"
+        go mod why {{.PKG}}
+    requires:
+      vars: [PKG]
+
+  vendor:
+    desc: Create vendor directory
+    cmds:
+      - |
+        echo "📦 Creating vendor directory..."
+        go mod vendor
+        echo "✅ Vendor directory created"
+
+  vendor:clean:
+    desc: Remove vendor directory
+    cmds:
+      - |
+        echo "🧹 Removing vendor directory..."
+        rm -rf vendor/
+        echo "✅ Vendor directory removed"
+
+  check:security:
+    desc: Check dependencies for vulnerabilities
+    cmds:
+      - |
+        if ! command -v nancy >/dev/null 2>&1; then
+          echo "Installing nancy..."
+          go install github.com/sonatype-nexus-community/nancy@latest
+        fi
+        
+        echo "🔒 Checking for vulnerabilities..."
+        go list -json -deps ./... | nancy sleuth
+        echo "✅ Security check complete"
+
+  check:licenses:
+    desc: Check dependency licenses
+    cmds:
+      - |
+        if ! command -v go-licenses >/dev/null 2>&1; then
+          echo "Installing go-licenses..."
+          go install github.com/google/go-licenses@latest
+        fi
+        
+        echo "📜 Checking licenses..."
+        go-licenses check ./...
+        echo "✅ License check complete"
+
+  clean:cache:
+    desc: Clean module cache
+    cmds:
+      - |
+        echo "🧹 Cleaning module cache..."
+        go clean -modcache
+        echo "✅ Module cache cleaned"
+
+  workspace:init:
+    desc: Initialize Go workspace
+    cmds:
+      - |
+        if [ -f "{{.MONOREPO_ROOT}}/go.work" ]; then
+          echo "⚠️  go.work already exists"
+          exit 0
+        fi
+        
+        echo "🔧 Initializing Go workspace..."
+        go work init
+        
+        # Add main module
+        go work use .
+        
+        # Add service modules
+        for dir in {{.MONOREPO_ROOT}}/cmd/*/; do
+          if [ -f "$dir/go.mod" ]; then
+            echo "  Adding $(basename $dir)..."
+            go work use "$dir"
+          fi
+        done
+        
+        echo "✅ Go workspace initialized"
+
+  workspace:sync:
+    desc: Sync Go workspace
+    cmds:
+      - |
+        if [ ! -f "{{.MONOREPO_ROOT}}/go.work" ]; then
+          echo "⚠️  No go.work file found"
+          echo "Run 'task deps:workspace:init' to create one"
+          exit 1
+        fi
+        
+        echo "🔄 Syncing workspace..."
+        go work sync
+        echo "✅ Workspace synced"

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -81,7 +81,7 @@ ENTRYPOINT ["/app"]
 # =============================================================================
 # Development stage - with debugging tools
 # =============================================================================
-FROM golang:1.23-alpine AS development
+FROM golang:1.25-alpine AS development
 
 # Install development tools
 RUN apk add --no-cache \

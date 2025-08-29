@@ -117,7 +117,7 @@ CMD ["air", "-c", ".air.toml"]
 # =============================================================================
 # Debug stage - production image with debug capabilities
 # =============================================================================
-FROM alpine:3.20 AS debug
+FROM alpine:3.22 AS debug
 
 # Install debugging tools
 RUN apk add --no-cache \

@@ -1,0 +1,40 @@
+{
+  "mcpServers": {
+    "gopls": {
+      "command": "mcp-language-server",
+      "args": [
+        "--workspace",
+        "REPLACE_ME_WITH_YOUR_WORKSPACE_PATH",
+        "--lsp",
+        "gopls"
+      ]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ]
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "go-debugger": {
+      "command": "mcp-go-debugger"
+    },
+    "serena": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server"]
+    }
+  }
+}

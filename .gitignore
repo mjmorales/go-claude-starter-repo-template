@@ -5,3 +5,4 @@
 .serena
 mcp-go-debugger.log
 .claude-backup-*
+!delete_after_copying/**/*

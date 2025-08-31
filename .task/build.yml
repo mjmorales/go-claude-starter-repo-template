@@ -8,11 +8,13 @@ vars:
   # Auto-discover buildable services
   BUILDABLE_SERVICES:
     sh: |
+      declare -a BUILDABLE_SERVICES=()
       for dir in {{.MONOREPO_ROOT}}/cmd/*/; do
         if [ -f "$dir/main.go" ]; then
-          basename "$dir"
+          BUILDABLE_SERVICES+=("$(basename "$dir")")
         fi
-      done 2>/dev/null || echo ""
+      done
+      echo "${BUILDABLE_SERVICES[@]}"
 
 tasks:
   all:
